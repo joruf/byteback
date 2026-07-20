@@ -2,6 +2,26 @@
 
 **ByteBack** is a Linux data recovery tool with a graphical user interface. It enumerates disks, partitions, disk images, and unallocated space; performs deep scans including ext4 deleted-file recovery; and lets you export selected items to a folder or ZIP archive.
 
+## Screenshots
+
+### Main window
+
+Select a disk, partition, image, or unallocated region and choose a scan mode.
+
+![Main window – ready to scan](docs/screenshots/main-window-ready.png)
+
+### Scan results
+
+Review carved and deleted files, inspect details, and export selected items.
+
+![Main window – scan results](docs/screenshots/main-window-results.png)
+
+### Disk image dialog
+
+Create a verified raw ``.dd`` image before scanning a source device.
+
+![Disk image dialog](docs/screenshots/disk-image-dialog.png)
+
 ## Features
 
 - **Device discovery** – lists block devices, partitions, loop devices, unallocated gaps, and saved disk images
@@ -37,7 +57,12 @@ byteback/
 ├── ui/                         # Tkinter interface + theme
 ├── utils/                      # Helpers
 ├── assets/                     # Icons and desktop entries
-└── tests/                      # 70+ unit/integration tests
+├── docs/
+│   └── screenshots/            # README screenshots
+├── scripts/
+│   ├── build_icons.sh          # Regenerate PNG icons from SVG
+│   └── generate_screenshots.py # Regenerate README screenshots
+└── tests/                      # 85+ unit/integration tests
 ```
 
 ## Requirements
@@ -48,10 +73,14 @@ byteback/
 - Python 3.10+ with `tkinter` (`python3-tk` on Debian/Ubuntu/Mint)
 - Optional: `python3-magic` for improved MIME detection
 - `polkit` (`pkexec`) for the one-time administrator prompt at startup
+- Optional: ImageMagick ``import`` or ``scrot`` (only needed to regenerate README screenshots)
 
 ## Installation
 
+Optional desktop install (launcher, icon, menu entry):
+
 ```bash
+git clone https://github.com/joruf/byteback.git
 cd byteback
 chmod +x install.sh
 ./install.sh
@@ -64,7 +93,10 @@ System-wide: `sudo ./install.sh --system`
 ## Usage
 
 ```bash
-python3 run.py
+git clone https://github.com/joruf/byteback.git
+cd byteback
+chmod +x run.py
+./run.py
 ```
 
 ByteBack starts a small pkexec helper once at launch (same pattern as Shredder). After authentication, disk scans and imaging use that helper without further prompts.
@@ -83,6 +115,14 @@ python3 -m venv .venv
 .venv/bin/pip install -r requirements-dev.txt
 .venv/bin/pytest -v
 ```
+
+## Regenerating screenshots
+
+```bash
+python3 scripts/generate_screenshots.py
+```
+
+Requires a running X11/Wayland session and ``import`` (ImageMagick) or ``scrot``.
 
 ## Important Notes
 
