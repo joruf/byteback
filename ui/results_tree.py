@@ -21,14 +21,17 @@ class ResultsTree(ttk.Frame):
         self,
         master: tk.Misc,
         on_select_entry: Optional[Callable[[Optional[RecoveryEntry]], None]] = None,
+        on_open_entry: Optional[Callable[[RecoveryEntry], None]] = None,
     ) -> None:
         """
         Args:
             master: Parent widget.
             on_select_entry: Callback when the user selects a tree row.
+            on_open_entry: Callback when the user double-clicks an openable file.
         """
         super().__init__(master)
         self._on_select_entry = on_select_entry
+        self._on_open_entry = on_open_entry
         self._entries_by_id: Dict[str, RecoveryEntry] = {}
         self._tree_id_to_entry: Dict[str, RecoveryEntry] = {}
         self._entry_to_tree_id: Dict[str, str] = {}
@@ -72,6 +75,7 @@ class ResultsTree(ttk.Frame):
         """Wire selection and checkbox toggle handlers."""
         self.tree.bind("<<TreeviewSelect>>", self._on_tree_select)
         self.tree.bind("<Button-1>", self._on_click)
+        self.tree.bind("<Double-1>", self._on_double_click)
 
     def clear(self) -> None:
         """Remove all items from the tree."""
@@ -225,6 +229,28 @@ class ResultsTree(ttk.Frame):
         new_state = not entry.selected
         self._set_entry_selected(entry, new_state)
         self._update_tree_checkbox(row_id, new_state)
+
+    def _on_double_click(self, event: tk.Event) -> None:
+        """Open a file with the system default application on double-click."""
+        region = self.tree.identify_region(event.x, event.y)
+        if region not in ("cell", "tree"):
+            return
+
+        column = self.tree.identify_column(event.x)
+        if column == "#1":
+            return
+
+        row_id = self.tree.identify_row(event.y)
+        if not row_id:
+            return
+
+        entry = self._tree_id_to_entry.get(row_id)
+        if not entry or entry.is_directory or not self._on_open_entry:
+            return
+
+        preview_source = entry.preview_path or entry.extra.get("absolute_path")
+        if preview_source:
+            self._on_open_entry(entry)
 
     def _set_entry_selected(self, entry: RecoveryEntry, selected: bool) -> None:
         """Apply selection to entry and all descendants."""

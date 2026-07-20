@@ -11,6 +11,22 @@ from models.storage_target import StorageTarget, TargetType
 
 
 @pytest.fixture
+def tk_root():
+    """
+    Provide a hidden Tk root window for UI widget tests.
+
+    Yields:
+        tkinter root window destroyed after the test.
+    """
+    import tkinter as tk
+
+    root = tk.Tk()
+    root.withdraw()
+    yield root
+    root.destroy()
+
+
+@pytest.fixture
 def sample_file_entry(tmp_path):
     """
     Create a RecoveryEntry pointing at a real temporary file.

@@ -94,3 +94,23 @@ class TestScanWorker:
         assert error is None
         worker.cancel()
         worker.wait(timeout=1.0)
+
+    def test_emit_progress_reuses_eta_between_intervals(self, monkeypatch):
+        """ETA is recalculated only every five seconds."""
+        worker = ScanWorker()
+        worker._start_time = 1000.0
+        worker._bytes_total = 1000
+        worker._bytes_processed = 500
+        worker._scan_mode = "deep_carve"
+        worker._last_eta_emit = 1000.0
+        worker._cached_eta_seconds = 120.0
+
+        times = iter([1002.0, 1006.0])
+        monkeypatch.setattr("services.scan_worker.time.time", lambda: next(times))
+
+        worker._emit_progress()
+        assert worker._cached_eta_seconds == 120.0
+
+        worker._emit_progress()
+        assert worker._cached_eta_seconds != 120.0
+        assert worker._cached_eta_seconds == 6.0

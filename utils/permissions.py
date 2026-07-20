@@ -4,6 +4,8 @@ Privilege and access checks for raw block-device operations.
 
 import os
 
+from services.root_helper import ROOT_HELPER
+
 
 def is_root() -> bool:
     """Return True when the process runs with effective UID 0."""
@@ -28,4 +30,9 @@ def can_read_device(device_path: str) -> bool:
             device.read(512)
         return True
     except OSError:
-        return False
+        pass
+
+    if ROOT_HELPER.is_running():
+        return ROOT_HELPER.probe(device_path)
+
+    return False

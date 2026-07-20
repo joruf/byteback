@@ -14,6 +14,7 @@ from models.recovery_entry import EntryType, RecoveryEntry
 from models.storage_target import StorageTarget
 from services.filesystems.ext4.inode import Ext4Inode, read_inode_raw
 from services.filesystems.ext4.superblock import Ext4Superblock
+from utils.device_io import open_device
 from utils.file_info import detect_mime_type
 
 logger = logging.getLogger(__name__)
@@ -66,7 +67,7 @@ class Ext4DeletedScanner:
         entries: List[RecoveryEntry] = []
         device_path = target.device_path
 
-        with open(device_path, "rb") as device:
+        with open_device(device_path) as device:
             superblock = Ext4Superblock.read_from_device(device)
             total = superblock.inode_count
 
@@ -197,7 +198,7 @@ class Ext4DeletedScanner:
         if target.filesystem and "ext" in target.filesystem.lower():
             return True
         try:
-            with open(target.device_path, "rb") as device:
+            with open_device(target.device_path) as device:
                 Ext4Superblock.read_from_device(device)
             return True
         except (OSError, ValueError):

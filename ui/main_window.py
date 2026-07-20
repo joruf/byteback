@@ -23,14 +23,17 @@ from models.scan_progress import ScanProgress
 from models.storage_target import StorageTarget
 from services.device_scanner import DeviceScanner
 from services.imaging.registry import DiskImageRegistry
+from services.instance_ipc import InstanceControlServer
 from services.recovery_exporter import RecoveryExporter
 from services.scan_worker import ScanWorker
 from services.scan_state import ScanStateManager
+from services.single_instance import SingleInstanceGuard
 from ui.details_panel import DetailsPanel
 from ui.image_dialog import DiskImageDialog
 from ui.results_tree import ResultsTree
 from ui.theme import configure_ui_style, style_listbox
-from utils.permissions import can_read_device, is_root
+from ui.window_icon import apply_window_icon
+from utils.permissions import can_read_device
 
 logger = logging.getLogger(__name__)
 
@@ -44,8 +47,8 @@ class MainWindow(tk.Tk):
         """Initialize widgets, services, and load block devices."""
         super().__init__()
         self.title(WINDOW_TITLE)
+        apply_window_icon(self)
         self.minsize(WINDOW_MIN_WIDTH, WINDOW_MIN_HEIGHT)
-        self.geometry(f"{WINDOW_MIN_WIDTH}x{WINDOW_MIN_HEIGHT}")
 
         self._targets: List[StorageTarget] = []
         self._target_by_id: Dict[str, StorageTarget] = {}
@@ -71,9 +74,13 @@ class MainWindow(tk.Tk):
         self._state_manager = ScanStateManager()
         self._image_registry = DiskImageRegistry()
         self._theme_colors = configure_ui_style(self)
+        self._instance_guard: Optional[SingleInstanceGuard] = None
+        self._control_server: Optional[InstanceControlServer] = None
 
         self._build_menu()
         self._build_layout()
+        self._apply_initial_geometry()
+        self._start_control_server()
         self._refresh_devices()
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -100,8 +107,11 @@ class MainWindow(tk.Tk):
 
     def _build_layout(self) -> None:
         """Compose all panels and controls."""
+        self.grid_rowconfigure(0, weight=1)
+        self.grid_columnconfigure(0, weight=1)
+
         paned = ttk.Panedwindow(self, orient=tk.HORIZONTAL)
-        paned.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+        paned.grid(row=0, column=0, sticky="nsew", padx=8, pady=(8, 0))
 
         # Left: device list and scan controls
         left_frame = ttk.Frame(paned, padding=4)
@@ -110,7 +120,7 @@ class MainWindow(tk.Tk):
         device_frame = ttk.LabelFrame(left_frame, text="Storage Devices & Regions", padding=6)
         device_frame.pack(fill=tk.BOTH, expand=True)
 
-        self._device_list = tk.Listbox(device_frame, exportselection=False, height=18)
+        self._device_list = tk.Listbox(device_frame, exportselection=False, height=12)
         style_listbox(self._device_list, self._theme_colors)
         device_scroll = ttk.Scrollbar(device_frame, orient="vertical", command=self._device_list.yview)
         self._device_list.configure(yscrollcommand=device_scroll.set)
@@ -149,6 +159,7 @@ class MainWindow(tk.Tk):
             text="Start scan",
             style="Primary.TButton",
             command=self._start_scan,
+            state="disabled",
         )
         self._start_button.pack(fill=tk.X, pady=2)
 
@@ -186,7 +197,11 @@ class MainWindow(tk.Tk):
         filter_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(6, 0))
         self._filter_var.trace_add("write", lambda *_args: self._apply_results_filter())
 
-        self._results_tree = ResultsTree(center_frame, on_select_entry=self._on_entry_selected)
+        self._results_tree = ResultsTree(
+            center_frame,
+            on_select_entry=self._on_entry_selected,
+            on_open_entry=self._view_file,
+        )
         self._results_tree.pack(fill=tk.BOTH, expand=True, pady=(4, 0))
 
         # Right: details
@@ -196,9 +211,9 @@ class MainWindow(tk.Tk):
         self._details = DetailsPanel(right_frame, on_view_file=self._view_file)
         self._details.pack(fill=tk.BOTH, expand=True)
 
-        # Bottom: progress and recovery
+        # Bottom: progress and recovery (fixed row – never compressed by the paned area)
         bottom = ttk.Frame(self, padding=(8, 0, 8, 8))
-        bottom.pack(fill=tk.X)
+        bottom.grid(row=1, column=0, sticky="ew")
 
         progress_frame = ttk.LabelFrame(bottom, text="Scan Progress", padding=6)
         progress_frame.pack(fill=tk.X)
@@ -244,6 +259,36 @@ class MainWindow(tk.Tk):
         )
         self._recover_button.pack(fill=tk.X, pady=(8, 0))
 
+    def _apply_initial_geometry(self) -> None:
+        """Size the window so footer controls and scan actions stay fully visible."""
+        self.update_idletasks()
+        required_width = max(WINDOW_MIN_WIDTH, self.winfo_reqwidth())
+        required_height = max(WINDOW_MIN_HEIGHT, self.winfo_reqheight())
+        self.minsize(WINDOW_MIN_WIDTH, required_height)
+        self.geometry(f"{required_width}x{required_height}")
+
+    def attach_instance_guard(self, guard: SingleInstanceGuard) -> None:
+        """
+        Attach the single-instance lock held for this process.
+
+        Args:
+            guard: Active lock guard acquired during startup.
+        """
+        self._instance_guard = guard
+
+    def _start_control_server(self) -> None:
+        """Listen for show requests from a second application launch."""
+        self._control_server = InstanceControlServer(on_show=lambda: self.after(0, self._bring_to_front))
+        self._control_server.start()
+
+    def _bring_to_front(self) -> None:
+        """Raise the main window when another launch attempts to start."""
+        self.deiconify()
+        self.lift()
+        self.focus_force()
+        self.attributes("-topmost", True)
+        self.after(200, lambda: self.attributes("-topmost", False))
+
     def _refresh_devices(self) -> None:
         """Reload disks, partitions, disk images, and unallocated regions."""
         scanner = DeviceScanner()
@@ -256,8 +301,10 @@ class MainWindow(tk.Tk):
         for target in self._targets:
             self._device_list.insert(tk.END, target.display_name)
 
-        root_hint = " (root privileges may be required for raw devices)" if not is_root() else ""
-        self._status_var.set(f"Found {len(self._targets)} storage targets.{root_hint}")
+        self._selected_target = None
+        self._update_start_button_state()
+
+        self._status_var.set(f"Found {len(self._targets)} storage targets.")
         self._update_resume_hint()
 
     def _update_resume_hint(self) -> None:
@@ -299,10 +346,24 @@ class MainWindow(tk.Tk):
         selection = self._device_list.curselection()
         if not selection:
             self._selected_target = None
+            self._update_start_button_state()
             return
         index = int(selection[0])
         if 0 <= index < len(self._targets):
             self._selected_target = self._targets[index]
+        else:
+            self._selected_target = None
+        self._update_start_button_state()
+
+    def _update_start_button_state(self) -> None:
+        """Enable Start scan only when a storage target is selected."""
+        if self._scan_worker.is_running:
+            return
+
+        if self._selected_target is not None:
+            self._start_button.configure(state="normal")
+        else:
+            self._start_button.configure(state="disabled")
 
     def _start_scan(self) -> None:
         """Validate selection and launch the background scan worker."""
@@ -315,16 +376,12 @@ class MainWindow(tk.Tk):
             return
 
         target = self._selected_target
-        if target.requires_root and not can_read_device(target.device_path):
-            answer = messagebox.askyesno(
+        if not can_read_device(target.device_path):
+            messagebox.showwarning(
                 APP_NAME,
-                (
-                    f"Reading {target.device_path} may require root privileges.\n\n"
-                    "Continue anyway? (Restart the application with sudo for raw access.)"
-                ),
+                f"The selected target is not readable: {target.device_path}",
             )
-            if not answer:
-                return
+            return
 
         self._results_tree.clear()
         self._details.show_entry(None)
@@ -481,12 +538,12 @@ class MainWindow(tk.Tk):
             self._cancel_button.configure(state="normal")
             self._device_list.configure(state="disabled")
         elif paused:
-            self._start_button.configure(state="normal")
+            self._update_start_button_state()
             self._pause_button.configure(state="normal", text="Resume")
             self._cancel_button.configure(state="normal")
             self._device_list.configure(state="normal")
         else:
-            self._start_button.configure(state="normal")
+            self._update_start_button_state()
             self._pause_button.configure(state="disabled", text="Pause")
             self._cancel_button.configure(state="disabled")
             self._device_list.configure(state="normal")
@@ -582,8 +639,7 @@ class MainWindow(tk.Tk):
                 "  • Auto – filesystem inventory on mounted partitions, carving elsewhere\n"
                 "  • Filesystem – inventory existing files on mounted partitions\n"
                 "  • Deep carve – all signatures with format validation\n"
-                "  • Quick carve – high-confidence signatures only (JPEG, PNG, PDF)\n\n"
-                "Raw device access may require root privileges (sudo)."
+                "  • Quick carve – high-confidence signatures only (JPEG, PNG, PDF)"
             ),
         )
 
@@ -592,6 +648,9 @@ class MainWindow(tk.Tk):
         if self._scan_worker.is_running:
             self._scan_worker.cancel()
             self._scan_worker.wait(timeout=3.0)
+        if self._control_server is not None:
+            self._control_server.stop()
+            self._control_server = None
         self.destroy()
 
     def run(self) -> None:

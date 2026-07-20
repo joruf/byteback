@@ -4,6 +4,7 @@ Unit tests for file_info and permissions utilities.
 
 import os
 from datetime import datetime
+from unittest.mock import MagicMock
 
 from utils import file_info
 from utils.permissions import can_read_device, is_root
@@ -63,3 +64,19 @@ class TestPermissions:
         device.write_bytes(b"data")
 
         assert can_read_device(str(device)) is True
+
+    def test_can_read_device_uses_helper_fallback(self, monkeypatch):
+        """Unreadable local devices can be probed through the root helper."""
+        monkeypatch.setattr("utils.permissions.os.path.exists", lambda _path: True)
+
+        def fail_open(*_args, **_kwargs):
+            raise OSError("permission denied")
+
+        monkeypatch.setattr("builtins.open", fail_open)
+
+        helper = MagicMock()
+        helper.is_running.return_value = True
+        helper.probe.return_value = True
+        monkeypatch.setattr("utils.permissions.ROOT_HELPER", helper)
+
+        assert can_read_device("/dev/sda") is True

@@ -12,6 +12,7 @@ from config.app_settings import APP_NAME
 from models.storage_target import StorageTarget
 from services.imaging.registry import DiskImageRegistry
 from services.imaging.writer import DiskImageWriter
+from ui.window_icon import apply_window_icon
 from utils.permissions import can_read_device
 
 
@@ -36,6 +37,7 @@ class DiskImageDialog(tk.Toplevel):
         """
         super().__init__(master)
         self.title(f"{APP_NAME} – Create Disk Image")
+        apply_window_icon(self)
         self.resizable(False, False)
         self.transient(master)
         self.grab_set()

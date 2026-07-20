@@ -10,6 +10,7 @@ from typing import Callable, Optional, Tuple
 
 from config.scan_settings import IMAGE_READ_CHUNK_SIZE
 from models.disk_image import DiskImageRecord
+from utils.device_io import open_device
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +50,7 @@ class DiskImageWriter:
         hasher = hashlib.sha256()
         processed = 0
 
-        with open(source_device, "rb") as source:
+        with open_device(source_device) as source:
             total = size_bytes or self._detect_size(source)
             os.makedirs(os.path.dirname(destination_path) or ".", exist_ok=True)
 

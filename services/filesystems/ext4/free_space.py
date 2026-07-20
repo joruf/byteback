@@ -10,6 +10,7 @@ from models.storage_target import StorageTarget
 from services.carving.file_carver import FileCarver
 from services.filesystems.ext4.binary import block_ranges_to_byte_ranges, read_block
 from services.filesystems.ext4.superblock import Ext4Superblock
+from utils.device_io import open_device
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +57,7 @@ class Ext4FreeSpaceScanner:
         entries: List[RecoveryEntry] = []
         device_path = target.device_path
 
-        with open(device_path, "rb") as device:
+        with open_device(device_path) as device:
             superblock = Ext4Superblock.read_from_device(device)
             block_ranges = self._collect_free_block_ranges(device, superblock)
             byte_ranges = block_ranges_to_byte_ranges(block_ranges, superblock.block_size)
@@ -172,7 +173,7 @@ class Ext4FreeSpaceScanner:
         if target.filesystem and "ext" in target.filesystem.lower():
             return True
         try:
-            with open(target.device_path, "rb") as device:
+            with open_device(target.device_path) as device:
                 Ext4Superblock.read_from_device(device)
             return True
         except (OSError, ValueError):

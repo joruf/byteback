@@ -127,14 +127,33 @@ set_install_paths() {
         APP_DIR="/usr/local/share/byteback"
         BIN_DIR="/usr/local/bin"
         DESKTOP_DIR="/usr/local/share/applications"
-        ICON_DIR="/usr/local/share/icons/hicolor/scalable/apps"
+        ICON_BASE="/usr/local/share/icons/hicolor"
         LAUNCHER="${BIN_DIR}/byteback"
     else
         APP_DIR="${HOME}/.local/share/byteback"
         BIN_DIR="${HOME}/.local/bin"
         DESKTOP_DIR="${HOME}/.local/share/applications"
-        ICON_DIR="${HOME}/.local/share/icons/hicolor/scalable/apps"
+        ICON_BASE="${HOME}/.local/share/icons/hicolor"
         LAUNCHER="${BIN_DIR}/byteback"
+    fi
+}
+
+install_icons() {
+    mkdir -p \
+        "${ICON_BASE}/scalable/apps" \
+        "${ICON_BASE}/256x256/apps" \
+        "${ICON_BASE}/128x128/apps" \
+        "${ICON_BASE}/64x64/apps" \
+        "${ICON_BASE}/48x48/apps"
+
+    cp "${SCRIPT_DIR}/assets/icons/byteback.svg" "${ICON_BASE}/scalable/apps/byteback.svg"
+    cp "${SCRIPT_DIR}/assets/icons/byteback-256.png" "${ICON_BASE}/256x256/apps/byteback.png"
+    cp "${SCRIPT_DIR}/assets/icons/byteback-128.png" "${ICON_BASE}/128x128/apps/byteback.png"
+    cp "${SCRIPT_DIR}/assets/icons/byteback-64.png" "${ICON_BASE}/64x64/apps/byteback.png"
+    cp "${SCRIPT_DIR}/assets/icons/byteback-48.png" "${ICON_BASE}/48x48/apps/byteback.png"
+
+    if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+        gtk-update-icon-cache -f -t "${ICON_BASE}" >/dev/null 2>&1 || true
     fi
 }
 
@@ -146,7 +165,7 @@ install_files() {
         die "System install requires root. Run: sudo ./install.sh --system"
     fi
 
-    mkdir -p "${APP_DIR}" "${BIN_DIR}" "${DESKTOP_DIR}" "${ICON_DIR}"
+    mkdir -p "${APP_DIR}" "${BIN_DIR}" "${DESKTOP_DIR}"
 
     rsync -a --delete \
         --exclude '.git' \
@@ -165,27 +184,17 @@ EOF
         "${SCRIPT_DIR}/assets/ByteBack.desktop" \
         >"${DESKTOP_DIR}/ByteBack.desktop"
 
-    sed "s|@LAUNCHER@|${LAUNCHER}|g" \
-        "${SCRIPT_DIR}/assets/ByteBack-Admin.desktop" \
-        >"${DESKTOP_DIR}/ByteBack-Admin.desktop"
-
-    cp "${SCRIPT_DIR}/assets/icons/byteback.svg" "${ICON_DIR}/byteback.svg"
+    install_icons
 
     if command -v update-desktop-database >/dev/null 2>&1; then
         update-desktop-database "${DESKTOP_DIR}" >/dev/null 2>&1 || true
     fi
 
-    if command -v gtk-update-icon-cache >/dev/null 2>&1; then
-        gtk-update-icon-cache -f -t "${ICON_DIR}/.." >/dev/null 2>&1 || true
-    fi
-
     log "Installation complete."
     log "Launcher: ${LAUNCHER}"
-    log "Desktop entries: ${DESKTOP_DIR}/ByteBack.desktop"
-    log "Admin desktop:   ${DESKTOP_DIR}/ByteBack-Admin.desktop"
+    log "Desktop entry: ${DESKTOP_DIR}/ByteBack.desktop"
     log ""
-    log "Use 'ByteBack' for mounted partitions."
-    log "Use 'ByteBack (Admin)' for raw disks and unallocated space."
+    log "Administrator privileges are requested once via pkexec at startup."
 }
 
 uninstall_files() {
@@ -195,8 +204,16 @@ uninstall_files() {
     rm -f "${LAUNCHER}"
     rm -f "${DESKTOP_DIR}/ByteBack.desktop"
     rm -f "${DESKTOP_DIR}/ByteBack-Admin.desktop"
-    rm -f "${ICON_DIR}/byteback.svg"
+    rm -f "${ICON_BASE}/scalable/apps/byteback.svg"
+    rm -f "${ICON_BASE}/256x256/apps/byteback.png"
+    rm -f "${ICON_BASE}/128x128/apps/byteback.png"
+    rm -f "${ICON_BASE}/64x64/apps/byteback.png"
+    rm -f "${ICON_BASE}/48x48/apps/byteback.png"
     rm -rf "${APP_DIR}"
+
+    if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+        gtk-update-icon-cache -f -t "${ICON_BASE}" >/dev/null 2>&1 || true
+    fi
 
     if command -v update-desktop-database >/dev/null 2>&1; then
         update-desktop-database "${DESKTOP_DIR}" >/dev/null 2>&1 || true

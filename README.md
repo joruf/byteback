@@ -47,17 +47,17 @@ byteback/
 - `mkfs.ext4` and `debugfs` (optional, for ext4 recovery tests)
 - Python 3.10+ with `tkinter` (`python3-tk` on Debian/Ubuntu/Mint)
 - Optional: `python3-magic` for improved MIME detection
-- **Root/sudo** for reading raw block devices and unallocated space
+- `polkit` (`pkexec`) for the one-time administrator prompt at startup
 
 ## Installation
 
 ```bash
-cd /home/joruf/Dokumente/GitHub/byteback
+cd byteback
 chmod +x install.sh
 ./install.sh
 ```
 
-This installs to `~/.local/share/byteback`, creates `~/.local/bin/byteback`, and registers **ByteBack** / **ByteBack (Admin)** desktop starters.
+This installs to `~/.local/share/byteback`, creates `~/.local/bin/byteback`, and registers a desktop starter.
 
 System-wide: `sudo ./install.sh --system`
 
@@ -65,9 +65,9 @@ System-wide: `sudo ./install.sh --system`
 
 ```bash
 python3 run.py
-# Raw disk scanning:
-sudo python3 run.py
 ```
+
+ByteBack starts a small pkexec helper once at launch (same pattern as Shredder). After authentication, disk scans and imaging use that helper without further prompts.
 
 ### Workflow
 

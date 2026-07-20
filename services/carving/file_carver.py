@@ -14,6 +14,7 @@ from config.storage_paths import PREVIEW_DIR_NAME
 from models.recovery_entry import EntryType, RecoveryEntry
 from models.storage_target import StorageTarget
 from services.carving.format_parsers import detect_file_size, validate_carved_file
+from utils.device_io import open_device
 
 logger = logging.getLogger(__name__)
 
@@ -109,7 +110,7 @@ class FileCarver:
         processed = start_from
 
         try:
-            with open(device_path, "rb") as device:
+            with open_device(device_path) as device:
                 device.seek(start_offset + start_from)
                 context = CarveContext(
                     device=device,

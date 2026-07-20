@@ -7,7 +7,7 @@ import threading
 import time
 from typing import Callable, Dict, List, Optional, Tuple
 
-from config.scan_settings import SCAN_MODE_AUTO
+from config.scan_settings import ETA_UPDATE_INTERVAL, SCAN_MODE_AUTO
 from models.recovery_entry import RecoveryEntry
 from models.scan_progress import ScanProgress
 from models.storage_target import StorageTarget
@@ -63,6 +63,8 @@ class ScanWorker:
         self._current_path = ""
         self._error_message: Optional[str] = None
         self._last_progress_emit = 0.0
+        self._last_eta_emit = 0.0
+        self._cached_eta_seconds: Optional[float] = None
 
     @property
     def is_running(self) -> bool:
@@ -126,6 +128,8 @@ class ScanWorker:
         self._error_message = None
         self._start_time = time.time()
         self._last_progress_emit = 0.0
+        self._last_eta_emit = 0.0
+        self._cached_eta_seconds = None
 
         if resume:
             self._load_resume_state(target)
@@ -324,13 +328,26 @@ class ScanWorker:
         is_cancelled: bool = False,
     ) -> None:
         """Build a ScanProgress snapshot and invoke the callback."""
-        elapsed = time.time() - self._start_time if self._start_time else 0.0
-        eta = None
-        if self._bytes_total > 0 and self._bytes_processed > 0 and not is_paused:
-            rate = self._bytes_processed / elapsed if elapsed > 0 else 0
-            if rate > 0:
-                remaining = max(0, self._bytes_total - self._bytes_processed)
-                eta = remaining / rate
+        now = time.time()
+        elapsed = now - self._start_time if self._start_time else 0.0
+        eta = self._cached_eta_seconds
+
+        if is_paused or is_complete or is_cancelled:
+            eta = None
+            self._cached_eta_seconds = None
+            self._last_eta_emit = 0.0
+        elif (
+            self._last_eta_emit == 0.0
+            or now - self._last_eta_emit >= ETA_UPDATE_INTERVAL
+        ):
+            eta = None
+            if self._bytes_total > 0 and self._bytes_processed > 0:
+                rate = self._bytes_processed / elapsed if elapsed > 0 else 0
+                if rate > 0:
+                    remaining = max(0, self._bytes_total - self._bytes_processed)
+                    eta = remaining / rate
+            self._cached_eta_seconds = eta
+            self._last_eta_emit = now
 
         pending = ""
         if self._scan_mode == "filesystem" and self._filesystem_queue:

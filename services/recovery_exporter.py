@@ -10,6 +10,7 @@ from typing import Callable, List, Optional
 
 from models.recovery_entry import EntryType, RecoveryEntry
 from services.file_carver import FileCarver
+from utils.device_io import open_device
 
 logger = logging.getLogger(__name__)
 
@@ -190,7 +191,7 @@ class RecoveryExporter:
 
         try:
             max_read = min(entry.size_bytes or 10 * 1024 * 1024, 100 * 1024 * 1024)
-            with open(entry.device_path, "rb") as device:
+            with open_device(entry.device_path) as device:
                 device.seek(entry.byte_offset)
                 data = device.read(max_read)
             with open(target, "wb") as handle:
