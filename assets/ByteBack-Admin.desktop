@@ -1,0 +1,13 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=ByteBack (Admin)
+GenericName=Data Recovery
+Comment=Scan raw disks and unallocated space for recoverable files
+Exec=pkexec @LAUNCHER@
+Icon=byteback
+Terminal=false
+Categories=System;Utility;Filesystem;
+Keywords=recovery;data;disk;partition;restore;carve;admin;
+StartupNotify=true
+MimeType=

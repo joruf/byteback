@@ -1,0 +1,63 @@
+"""
+ByteBack configuration package.
+
+Re-exports all settings for backward-compatible imports via ``config``.
+"""
+
+from config.app_settings import (
+    APP_NAME,
+    APP_VERSION,
+    WINDOW_MIN_HEIGHT,
+    WINDOW_MIN_WIDTH,
+    WINDOW_TITLE,
+)
+from config.scan_settings import (
+    ALL_SCAN_MODES,
+    CARVE_SCAN_INTERVAL,
+    FILESYSTEM_SCAN_INTERVAL,
+    IMAGE_READ_CHUNK_SIZE,
+    PROGRESS_MIN_INTERVAL,
+    RAW_READ_CHUNK_SIZE,
+    SCAN_MODE_AUTO,
+    SCAN_MODE_DEEP_CARVE,
+    SCAN_MODE_EXT4_DELETED,
+    SCAN_MODE_FILESYSTEM,
+    SCAN_MODE_FREE_SPACE,
+    SCAN_MODE_QUICK_CARVE,
+)
+from config.signatures import CHECK_OFF, CHECK_ON, FILE_SIGNATURES
+from config.storage_paths import (
+    IMAGE_DIR,
+    IMAGE_REGISTRY_FILENAME,
+    PREVIEW_DIR_NAME,
+    STATE_DIR,
+    STATE_FILENAME,
+)
+
+__all__ = [
+    "ALL_SCAN_MODES",
+    "APP_NAME",
+    "APP_VERSION",
+    "CARVE_SCAN_INTERVAL",
+    "CHECK_OFF",
+    "CHECK_ON",
+    "FILESYSTEM_SCAN_INTERVAL",
+    "FILE_SIGNATURES",
+    "IMAGE_DIR",
+    "IMAGE_REGISTRY_FILENAME",
+    "IMAGE_READ_CHUNK_SIZE",
+    "PREVIEW_DIR_NAME",
+    "PROGRESS_MIN_INTERVAL",
+    "RAW_READ_CHUNK_SIZE",
+    "SCAN_MODE_AUTO",
+    "SCAN_MODE_DEEP_CARVE",
+    "SCAN_MODE_EXT4_DELETED",
+    "SCAN_MODE_FILESYSTEM",
+    "SCAN_MODE_FREE_SPACE",
+    "SCAN_MODE_QUICK_CARVE",
+    "STATE_DIR",
+    "STATE_FILENAME",
+    "WINDOW_MIN_HEIGHT",
+    "WINDOW_MIN_WIDTH",
+    "WINDOW_TITLE",
+]

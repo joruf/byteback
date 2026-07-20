@@ -1,0 +1,23 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# --- Local install marker ---
+.initialized
+
+# --- IDE / OS ---
+.idea/
+.vscode/
+.history/
+.DS_Store
+Thumbs.db

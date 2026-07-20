@@ -1,0 +1,13 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=ByteBack
+GenericName=Data Recovery
+Comment=Scan disks and partitions for recoverable files
+Exec=@LAUNCHER@
+Icon=byteback
+Terminal=false
+Categories=System;Utility;Filesystem;
+Keywords=recovery;data;disk;partition;restore;carve;
+StartupNotify=true
+MimeType=

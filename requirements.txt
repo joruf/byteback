@@ -1,0 +1,3 @@
+# ByteBack has no mandatory pip dependencies beyond the Python standard library.
+# Optional: python-magic improves MIME type detection when installed system-wide.
+python-magic>=0.4.27
