@@ -2,8 +2,8 @@
 Disk image metadata model.
 """
 
-from dataclasses import dataclass
-from typing import Optional
+from dataclasses import dataclass, field
+from typing import List, Optional, Tuple
 
 
 @dataclass
@@ -19,6 +19,8 @@ class DiskImageRecord:
         sha256: SHA-256 hash of the image content.
         created_at: ISO timestamp when imaging completed.
         label: Optional user-visible label.
+        bad_sector_ranges: ``(offset, length)`` byte ranges that could not be read
+            from the source and were zero-filled in the image.
     """
 
     image_id: str
@@ -28,6 +30,7 @@ class DiskImageRecord:
     sha256: str
     created_at: str
     label: str = ""
+    bad_sector_ranges: List[Tuple[int, int]] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         """Serialize the record for JSON persistence."""
@@ -39,6 +42,7 @@ class DiskImageRecord:
             "sha256": self.sha256,
             "created_at": self.created_at,
             "label": self.label,
+            "bad_sector_ranges": [[offset, length] for offset, length in self.bad_sector_ranges],
         }
 
     @classmethod
@@ -52,11 +56,18 @@ class DiskImageRecord:
             sha256=data.get("sha256", ""),
             created_at=data.get("created_at", ""),
             label=data.get("label", ""),
+            bad_sector_ranges=[tuple(entry) for entry in data.get("bad_sector_ranges", [])],
         )
+
+    @property
+    def has_bad_sectors(self) -> bool:
+        """True when one or more source ranges could not be read during imaging."""
+        return len(self.bad_sector_ranges) > 0
 
     @property
     def display_name(self) -> str:
         """Human-readable label for device lists."""
         size_mb = self.size_bytes / (1024 * 1024)
         name = self.label or self.image_id
-        return f"{name}  [Disk Image, {size_mb:.1f} MiB]"
+        suffix = f", {len(self.bad_sector_ranges)} bad sector range(s)" if self.has_bad_sectors else ""
+        return f"{name}  [Disk Image, {size_mb:.1f} MiB{suffix}]"

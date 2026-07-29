@@ -157,6 +157,19 @@ FILE_SIGNATURES = {
         "footer": None,
         "max_size": 50 * 1024 * 1024,
     },
+    "TAR Archive": {
+        "extensions": [".tar"],
+        "header": b"ustar",
+        "header_offset": 257,
+        "footer": None,
+        "max_size": 500 * 1024 * 1024,
+    },
+    "PSD Image": {
+        "extensions": [".psd"],
+        "header": b"8BPS",
+        "footer": None,
+        "max_size": 200 * 1024 * 1024,
+    },
 }
 
 CHECK_ON = "☑"

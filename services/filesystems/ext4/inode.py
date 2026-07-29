@@ -111,10 +111,11 @@ class Ext4Inode:
             return b""
 
         max_read = min(self.size, 100 * 1024 * 1024)
+        max_blocks = max_read // superblock.block_size + 2
         if self.flags & EXT4_EXTENTS_FL:
-            blocks = self._collect_extent_blocks(raw_inode, superblock, device)
+            blocks = self._collect_extent_blocks(raw_inode, superblock, device, max_blocks)
         else:
-            blocks = self._collect_direct_blocks(raw_inode)
+            blocks = self._collect_direct_blocks(raw_inode, superblock, device, max_blocks)
 
         chunks: List[bytes] = []
         remaining = max_read
@@ -131,16 +132,100 @@ class Ext4Inode:
 
         return b"".join(chunks)[:max_read]
 
-    def _collect_direct_blocks(self, raw_inode: bytes) -> List[int]:
-        """Collect block numbers from the traditional i_block array."""
+    def _collect_direct_blocks(
+        self,
+        raw_inode: bytes,
+        superblock: Ext4Superblock,
+        device: BinaryIO,
+        max_blocks: int,
+    ) -> List[int]:
+        """
+        Collect block numbers from the traditional (non-extent) ``i_block`` array,
+        following the single/double/triple indirect pointers (``i_block[12..14]``)
+        in addition to the 12 direct pointers.
+        """
         blocks: List[int] = []
-        for index in range(15):
+        for index in range(12):
             offset = 0x28 + (index * 4)
             if offset + 4 > len(raw_inode):
                 break
             block_number = read_le32(raw_inode, offset)
             if block_number:
                 blocks.append(block_number)
+
+        for level, pointer_index in ((1, 12), (2, 13), (3, 14)):
+            if len(blocks) >= max_blocks:
+                break
+            offset = 0x28 + (pointer_index * 4)
+            if offset + 4 > len(raw_inode):
+                break
+            indirect_block = read_le32(raw_inode, offset)
+            if not indirect_block:
+                continue
+            blocks.extend(
+                self._walk_indirect_block(
+                    device,
+                    superblock,
+                    indirect_block,
+                    level,
+                    max_blocks - len(blocks),
+                    seen=set(),
+                )
+            )
+
+        return blocks[:max_blocks]
+
+    def _walk_indirect_block(
+        self,
+        device: BinaryIO,
+        superblock: Ext4Superblock,
+        block_number: int,
+        level: int,
+        remaining_budget: int,
+        seen: set,
+    ) -> List[int]:
+        """
+        Recursively resolve an indirect block chain into physical data-block numbers.
+
+        Args:
+            block_number: Block holding pointers (single/double/triple indirect).
+            level: 1 for a single-indirect block, 2 for double, 3 for triple.
+            remaining_budget: Max additional blocks to collect (safety cap).
+            seen: Block numbers already visited, to guard against corrupt cycles.
+
+        Returns:
+            Physical data-block numbers referenced (directly or transitively).
+        """
+        if remaining_budget <= 0 or block_number == 0 or block_number in seen:
+            return []
+        seen.add(block_number)
+
+        try:
+            raw = read_block(device, superblock.block_size, block_number)
+        except OSError:
+            return []
+
+        pointers_per_block = superblock.block_size // 4
+        blocks: List[int] = []
+        for index in range(pointers_per_block):
+            if len(blocks) >= remaining_budget:
+                break
+            pointer = read_le32(raw, index * 4)
+            if not pointer:
+                continue
+            if level == 1:
+                blocks.append(pointer)
+            else:
+                blocks.extend(
+                    self._walk_indirect_block(
+                        device,
+                        superblock,
+                        pointer,
+                        level - 1,
+                        remaining_budget - len(blocks),
+                        seen,
+                    )
+                )
         return blocks
 
     def _collect_extent_blocks(
@@ -148,8 +233,9 @@ class Ext4Inode:
         raw_inode: bytes,
         superblock: Ext4Superblock,
         device: BinaryIO,
+        max_blocks: int,
     ) -> List[int]:
-        """Walk an extent tree and return physical block numbers."""
+        """Walk an extent tree (any depth) and return physical block numbers."""
         header = raw_inode[0x28 : 0x28 + 12]
         magic = read_le16(header, 0x00)
         if magic != EXT4_EXT_MAGIC:
@@ -157,37 +243,91 @@ class Ext4Inode:
 
         depth = read_le16(header, 0x06)
         entries = read_le16(header, 0x02)
+        body = raw_inode[0x28 + 12 : 0x28 + 12 + entries * 12]
+        return self._walk_extent_node(body, depth, superblock, device, max_blocks, seen=set())
+
+    def _walk_extent_node(
+        self,
+        body: bytes,
+        depth: int,
+        superblock: Ext4Superblock,
+        device: BinaryIO,
+        remaining_budget: int,
+        seen: set,
+    ) -> List[int]:
+        """
+        Recursively walk one extent-tree node.
+
+        Args:
+            body: Raw entries following the 12-byte extent header.
+            depth: Header's recorded tree depth (0 = leaf, holding data extents).
+            remaining_budget: Max additional blocks to collect (safety cap).
+            seen: Physical block numbers already visited, guards against cycles.
+
+        Returns:
+            Physical data-block numbers covered by this node and its children.
+        """
+        if remaining_budget <= 0:
+            return []
+
         if depth == 0:
-            return self._expand_extent_entries(raw_inode[0x28 + 12 : 0x28 + 12 + entries * 12])
+            return self._expand_extent_entries(body, remaining_budget)
 
         blocks: List[int] = []
-        entry_offset = 0x28 + 12
-        for _index in range(entries):
-            entry = raw_inode[entry_offset : entry_offset + 12]
-            entry_offset += 12
-            leaf_block = read_le32(entry, 0x04)
-            leaf_raw = read_block(device, superblock.block_size, leaf_block)
-            leaf_magic = read_le16(leaf_raw, 0x00)
-            if leaf_magic != EXT4_EXT_MAGIC:
+        for offset in range(0, len(body), 12):
+            if len(blocks) >= remaining_budget:
+                break
+            entry = body[offset : offset + 12]
+            if len(entry) < 12:
+                break
+
+            child_block = read_le32(entry, 0x04) | (read_le16(entry, 0x08) << 32)
+            if child_block == 0 or child_block in seen:
                 continue
-            leaf_entries = read_le16(leaf_raw, 0x02)
-            blocks.extend(self._expand_extent_entries(leaf_raw[12 : 12 + leaf_entries * 12]))
+            seen.add(child_block)
+
+            try:
+                child_raw = read_block(device, superblock.block_size, child_block)
+            except OSError:
+                continue
+
+            child_magic = read_le16(child_raw, 0x00)
+            if child_magic != EXT4_EXT_MAGIC:
+                continue
+
+            child_depth = read_le16(child_raw, 0x06)
+            child_entries = read_le16(child_raw, 0x02)
+            child_body = child_raw[12 : 12 + child_entries * 12]
+            blocks.extend(
+                self._walk_extent_node(
+                    child_body,
+                    child_depth,
+                    superblock,
+                    device,
+                    remaining_budget - len(blocks),
+                    seen,
+                )
+            )
         return blocks
 
     @staticmethod
-    def _expand_extent_entries(raw_entries: bytes) -> List[int]:
-        """Expand extent entries into a flat physical block list."""
+    def _expand_extent_entries(raw_entries: bytes, remaining_budget: int) -> List[int]:
+        """Expand leaf extent entries into a flat physical block list."""
         blocks: List[int] = []
         for offset in range(0, len(raw_entries), 12):
-            if offset + 12 > len(raw_entries):
+            if len(blocks) >= remaining_budget:
                 break
             entry = raw_entries[offset : offset + 12]
+            if len(entry) < 12:
+                break
             length = read_le16(entry, 0x04)
             start_hi = read_le16(entry, 0x06)
             start_lo = read_le32(entry, 0x08)
             physical_start = start_lo | (start_hi << 32)
             length_blocks = length & 0x7FFF
             for block_index in range(length_blocks):
+                if len(blocks) >= remaining_budget:
+                    break
                 blocks.append(physical_start + block_index)
         return blocks
 

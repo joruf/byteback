@@ -53,10 +53,12 @@ class DiskImageDialog(tk.Toplevel):
         self._dest_var = tk.StringVar()
         self._progress_var = tk.DoubleVar(value=0.0)
         self._status_var = tk.StringVar(value="Select a source device and destination.")
+        self._resume_var = tk.BooleanVar(value=False)
 
         self._build_widgets()
         if self._targets:
             self._source_var.set(self._targets[0].device_path)
+        self._dest_var.trace_add("write", lambda *_args: self._check_resumable())
 
     def _build_widgets(self) -> None:
         """Lay out dialog controls."""
@@ -79,15 +81,23 @@ class DiskImageDialog(tk.Toplevel):
         ttk.Entry(dest_row, textvariable=self._dest_var, width=34).pack(side=tk.LEFT, fill=tk.X, expand=True)
         ttk.Button(dest_row, text="Browse…", command=self._browse_destination).pack(side=tk.LEFT, padx=(6, 0))
 
+        self._resume_check = ttk.Checkbutton(
+            frame,
+            text="Resume interrupted imaging (found saved progress for this destination)",
+            variable=self._resume_var,
+        )
+        self._resume_check.grid(row=2, column=0, columnspan=2, sticky="w", pady=(4, 0))
+        self._resume_check.grid_remove()
+
         ttk.Progressbar(frame, variable=self._progress_var, maximum=100.0).grid(
-            row=2, column=0, columnspan=2, sticky="we", pady=(8, 4)
+            row=3, column=0, columnspan=2, sticky="we", pady=(8, 4)
         )
         ttk.Label(frame, textvariable=self._status_var, wraplength=420).grid(
-            row=3, column=0, columnspan=2, sticky="w"
+            row=4, column=0, columnspan=2, sticky="w"
         )
 
         button_row = ttk.Frame(frame)
-        button_row.grid(row=4, column=0, columnspan=2, pady=(12, 0), sticky="e")
+        button_row.grid(row=5, column=0, columnspan=2, pady=(12, 0), sticky="e")
         self._start_button = ttk.Button(
             button_row,
             text="Create image",
@@ -95,7 +105,8 @@ class DiskImageDialog(tk.Toplevel):
             command=self._start_imaging,
         )
         self._start_button.pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Button(button_row, text="Cancel", command=self.destroy).pack(side=tk.LEFT)
+        self._cancel_button = ttk.Button(button_row, text="Cancel", command=self._on_cancel)
+        self._cancel_button.pack(side=tk.LEFT)
 
         if self._targets:
             default_dest = DiskImageRegistry.default_image_path(self._targets[0].device_path)
@@ -110,6 +121,25 @@ class DiskImageDialog(tk.Toplevel):
         )
         if path:
             self._dest_var.set(path)
+
+    def _on_cancel(self) -> None:
+        """Stop a running imaging job (progress is checkpointed for later resume), or just close."""
+        if self._running:
+            self._cancel_event.set()
+            self._cancel_button.configure(state="disabled")
+            self._status_var.set("Cancelling… progress will be saved for resume.")
+        else:
+            self.destroy()
+
+    def _check_resumable(self) -> None:
+        """Show the resume checkbox when a saved checkpoint exists for this destination."""
+        destination = self._dest_var.get().strip()
+        if destination and DiskImageWriter.has_resumable_checkpoint(destination):
+            self._resume_var.set(True)
+            self._resume_check.grid()
+        else:
+            self._resume_var.set(False)
+            self._resume_check.grid_remove()
 
     def _start_imaging(self) -> None:
         """Validate inputs and start background imaging."""
@@ -134,14 +164,15 @@ class DiskImageDialog(tk.Toplevel):
         self._start_button.configure(state="disabled")
         self._status_var.set("Creating disk image…")
 
+        resume = self._resume_var.get()
         thread = threading.Thread(
             target=self._run_imaging,
-            args=(source, destination),
+            args=(source, destination, resume),
             daemon=True,
         )
         thread.start()
 
-    def _run_imaging(self, source: str, destination: str) -> None:
+    def _run_imaging(self, source: str, destination: str, resume: bool) -> None:
         """Background imaging thread."""
         try:
             record, output_path = self._writer.create_image(
@@ -149,15 +180,16 @@ class DiskImageDialog(tk.Toplevel):
                 destination_path=destination,
                 on_progress=self._on_progress,
                 should_cancel=self._cancel_event.is_set,
+                resume=resume,
             )
             self._registry.register(record)
-            self.after(
-                0,
-                lambda: self._imaging_done(
-                    True,
-                    f"Image created successfully.\n\n{output_path}\n\nSHA-256:\n{record.sha256}",
-                ),
-            )
+            message = f"Image created successfully.\n\n{output_path}\n\nSHA-256:\n{record.sha256}"
+            if record.has_bad_sectors:
+                message += (
+                    f"\n\nWarning: {len(record.bad_sector_ranges)} unreadable sector range(s) "
+                    "on the source were zero-filled in the image."
+                )
+            self.after(0, lambda: self._imaging_done(True, message))
         except Exception as exc:
             self.after(0, lambda: self._imaging_done(False, str(exc)))
 
@@ -175,10 +207,14 @@ class DiskImageDialog(tk.Toplevel):
         """Show result and close on success."""
         self._running = False
         self._start_button.configure(state="normal")
+        self._cancel_button.configure(state="normal")
         if success:
             messagebox.showinfo(APP_NAME, message)
             if self._on_complete:
                 self._on_complete()
             self.destroy()
+        elif message == "Disk imaging cancelled":
+            self._status_var.set("Cancelled. Progress was saved — reopen and check "
+                                  "\"Resume interrupted imaging\" to continue.")
         else:
             messagebox.showerror(APP_NAME, f"Imaging failed:\n{message}")

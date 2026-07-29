@@ -11,6 +11,7 @@ from typing import List, Optional
 from config.storage_paths import IMAGE_DIR, IMAGE_REGISTRY_FILENAME
 from models.disk_image import DiskImageRecord
 from models.storage_target import StorageTarget, TargetType
+from utils.atomic_io import write_json_atomic
 
 logger = logging.getLogger(__name__)
 
@@ -84,11 +85,10 @@ class DiskImageRegistry:
         return targets
 
     def _save(self, records: List[DiskImageRecord]) -> None:
-        """Write registry JSON to disk."""
+        """Write registry JSON to disk atomically (temp file + rename)."""
         payload = {"images": [record.to_dict() for record in records]}
         try:
-            with open(self._registry_path, "w", encoding="utf-8") as handle:
-                json.dump(payload, handle, indent=2)
+            write_json_atomic(self._registry_path, payload)
         except OSError as exc:
             logger.error("Could not save image registry: %s", exc)
 

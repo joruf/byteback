@@ -430,6 +430,8 @@ class FileCarver:
             ".avi": "video/x-msvideo",
             ".mkv": "video/x-matroska",
             ".elf": "application/x-elf",
+            ".tar": "application/x-tar",
+            ".psd": "image/vnd.adobe.photoshop",
         }
         return mapping.get(extension.lower(), "application/octet-stream")
 
