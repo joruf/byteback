@@ -72,12 +72,11 @@ class Ext4FreeSpaceScanner:
                 if should_cancel and should_cancel():
                     return entries, processed_global, range_index
 
-                while should_pause and should_pause():
-                    if should_cancel and should_cancel():
-                        return entries, processed_global, range_index
-                    import time
-
-                    time.sleep(0.2)
+                if should_pause and should_pause():
+                    # Return immediately (rather than blocking this thread in a sleep
+                    # loop) so the worker can persist a resumable checkpoint and let
+                    # the thread exit; resuming starts a fresh call at this range.
+                    return entries, processed_global, range_index
 
                 carve_target = StorageTarget(
                     target_id=target.target_id,

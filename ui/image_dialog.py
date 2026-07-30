@@ -55,10 +55,19 @@ class DiskImageDialog(tk.Toplevel):
         self._status_var = tk.StringVar(value="Select a source device and destination.")
         self._resume_var = tk.BooleanVar(value=False)
 
+        # Registered before _build_widgets() so the default destination it fills in
+        # (which may itself already have a resumable checkpoint) is checked too,
+        # not just later manual edits.
+        self._dest_var.trace_add("write", lambda *_args: self._check_resumable())
         self._build_widgets()
         if self._targets:
             self._source_var.set(self._targets[0].device_path)
-        self._dest_var.trace_add("write", lambda *_args: self._check_resumable())
+
+        # Route the window manager's close button through the same cancel logic as
+        # the Cancel button: while imaging is running this must not just destroy the
+        # dialog and abandon the background thread unobserved (with no way to
+        # cancel it and a checkpoint save it never gets to make).
+        self.protocol("WM_DELETE_WINDOW", self._on_cancel)
 
     def _build_widgets(self) -> None:
         """Lay out dialog controls."""

@@ -6,6 +6,7 @@ import pytest
 
 from models.storage_target import StorageTarget, TargetType
 from services.filesystems.ext4.deleted_scanner import Ext4DeletedScanner
+from services.filesystems.ext4.superblock import Ext4Superblock
 from tests.ext4_helpers import (
     create_ext4_image,
     delete_file_from_image,
@@ -44,6 +45,68 @@ class TestExt4DeletedScanner:
         assert recovered.entry_type.value == "deleted"
         assert recovered.preview_path
         assert "recover this deleted file" in open(recovered.preview_path, encoding="utf-8").read()
+
+    def test_scan_returns_immediately_when_paused(self, tmp_path):
+        """Pause must make scan() return right away, not block until resumed."""
+        image = tmp_path / "vol.ext4"
+        create_ext4_image(image, size_mb=8)
+        with open(image, "rb") as device:
+            first_inode = Ext4Superblock.read_from_device(device).first_inode
+
+        target = StorageTarget(
+            target_id="pause_test",
+            name="vol",
+            device_path=str(image),
+            target_type=TargetType.IMAGE,
+            size_bytes=image.stat().st_size,
+            filesystem="ext4",
+        )
+        scanner = Ext4DeletedScanner(preview_dir=str(tmp_path / "previews"))
+
+        entries, final_inode = scanner.scan(
+            target=target,
+            source_target_id="pause_test",
+            should_pause=lambda: True,
+        )
+
+        assert entries == []
+        assert final_inode == first_inode
+
+    def test_scan_cancel_reports_actual_position_not_total(self, tmp_path):
+        """
+        Regression test: cancelling must record the actual inode reached, not the
+        total inode count — otherwise a resumed scan silently skips almost the
+        entire inode table with no indication anything was missed.
+        """
+        image = tmp_path / "vol.ext4"
+        create_ext4_image(image, size_mb=8)
+        with open(image, "rb") as device:
+            superblock = Ext4Superblock.read_from_device(device)
+
+        target = StorageTarget(
+            target_id="cancel_test",
+            name="vol",
+            device_path=str(image),
+            target_type=TargetType.IMAGE,
+            size_bytes=image.stat().st_size,
+            filesystem="ext4",
+        )
+        scanner = Ext4DeletedScanner(preview_dir=str(tmp_path / "previews"))
+
+        calls = []
+
+        def cancel_after_three():
+            calls.append(1)
+            return len(calls) > 3
+
+        _entries, final_inode = scanner.scan(
+            target=target,
+            source_target_id="cancel_test",
+            should_cancel=cancel_after_three,
+        )
+
+        assert final_inode < superblock.inode_count
+        assert final_inode == superblock.first_inode + 3
 
     def test_supports_ext4_target(self, tmp_path):
         """supports_target detects ext4 volumes."""

@@ -101,3 +101,39 @@ class TestRecoveryExporter:
         exporter = RecoveryExporter()
 
         assert exporter._resolve_source_path(entry) == str(preview)
+
+    def test_read_carved_to_temp_does_not_truncate_large_entries(self, tmp_path):
+        """
+        Regression test: re-extracting a carved entry larger than 100MB must not be
+        silently truncated to exactly 100MB — the old code capped every re-read at
+        that hardcoded size regardless of the entry's real (already-correct)
+        size_bytes, corrupting any larger recovered file with no error shown.
+        """
+        device_path = tmp_path / "device.img"
+        size = 100 * 1024 * 1024 + 4096  # 4 KiB past the old hardcoded 100MB cap
+        marker = b"\xab" * 4096
+        with open(device_path, "wb") as handle:
+            handle.seek(size - len(marker))
+            handle.write(marker)
+
+        entry = RecoveryEntry(
+            entry_id="big1",
+            name="big.bin",
+            relative_path="/carved/big.bin",
+            entry_type=EntryType.CARVED,
+            size_bytes=size,
+            source_target_id="t1",
+            device_path=str(device_path),
+            byte_offset=0,
+            extension=".bin",
+        )
+        exporter = RecoveryExporter()
+        exporter._carver.preview_dir = str(tmp_path / "previews")
+
+        result_path = exporter._read_carved_to_temp(entry)
+
+        assert result_path is not None
+        assert os.path.getsize(result_path) == size
+        with open(result_path, "rb") as handle:
+            handle.seek(size - len(marker))
+            assert handle.read(len(marker)) == marker

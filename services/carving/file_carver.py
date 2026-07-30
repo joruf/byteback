@@ -124,12 +124,12 @@ class FileCarver:
                     if should_cancel and should_cancel():
                         break
 
-                    while should_pause and should_pause():
-                        if should_cancel and should_cancel():
-                            return entries, processed
-                        import time
-
-                        time.sleep(0.2)
+                    if should_pause and should_pause():
+                        # Return immediately (rather than blocking this thread in a
+                        # sleep loop) so the worker can persist a resumable checkpoint
+                        # and let the thread exit; resuming starts a fresh call at
+                        # this same offset.
+                        return entries, processed
 
                     read_size = min(RAW_READ_CHUNK_SIZE, size_bytes - processed)
                     try:
@@ -196,6 +196,11 @@ class FileCarver:
         consumed_until = 0
 
         entries.extend(self._resolve_pending_footers(buffer, base_offset, context))
+        # Positions already tracked as pending must not be re-detected as a "new" header
+        # match every pass now that the buffer is retained (not trimmed away) while a
+        # footer search is still in progress — otherwise the same header would keep
+        # spawning duplicate PendingCarve entries for as long as it stays unresolved.
+        pending_offsets = {pending.absolute_offset for pending in context.pending}
 
         active_signatures = FILE_SIGNATURES
         if not context.deep_scan:
@@ -225,7 +230,7 @@ class FileCarver:
                     continue
 
                 absolute_offset = base_offset + file_start
-                if absolute_offset in context.seen_offsets:
+                if absolute_offset in context.seen_offsets or absolute_offset in pending_offsets:
                     search_start = index + 1
                     continue
 
@@ -275,9 +280,19 @@ class FileCarver:
 
                 search_start = index + len(header)
 
-        if consumed_until > overlap:
-            buffer = buffer[consumed_until - overlap :]
-        elif len(buffer) > overlap * 4:
+        # Never trim past the start of a still-pending (footer not yet found) carve —
+        # otherwise its header bytes are discarded and it can never be completed even
+        # if the footer arrives in a later read (see _resolve_pending_footers).
+        trim_to = consumed_until
+        if context.pending:
+            min_pending_start = min(
+                max(pending.absolute_offset - base_offset, 0) for pending in context.pending
+            )
+            trim_to = min(trim_to, min_pending_start)
+
+        if trim_to > overlap:
+            buffer = buffer[trim_to - overlap :]
+        elif not context.pending and len(buffer) > overlap * 4:
             buffer = buffer[-overlap:]
 
         return entries, buffer
@@ -293,31 +308,48 @@ class FileCarver:
         still_pending: List[PendingCarve] = []
 
         for pending in context.pending:
-            if pending.absolute_offset < base_offset:
-                continue
             if pending.absolute_offset in context.seen_offsets:
+                continue
+
+            max_size = int(pending.signature.get("max_size", 10 * 1024 * 1024))
+            exceeded_max_size = (base_offset + len(buffer) - pending.absolute_offset) > max_size
+
+            if pending.absolute_offset < base_offset:
+                # _process_buffer keeps the buffer from being trimmed past any pending
+                # carve's start, so this should not happen — logged instead of silently
+                # dropped in case some other path (e.g. skipping a hung/bad read region)
+                # ever advances the buffer base past it.
+                logger.warning(
+                    "Pending %s carve at offset %s lost before its footer was found; dropping",
+                    pending.label,
+                    pending.absolute_offset,
+                )
                 continue
 
             relative_start = pending.absolute_offset - base_offset
             header = pending.signature["header"]
             footer = pending.signature.get("footer")
             if footer is None or relative_start < 0 or relative_start >= len(buffer):
-                still_pending.append(pending)
+                if not exceeded_max_size:
+                    still_pending.append(pending)
                 continue
 
             header_index = buffer.find(header, relative_start)
             if header_index < 0:
-                still_pending.append(pending)
+                if not exceeded_max_size:
+                    still_pending.append(pending)
                 continue
 
             file_start = header_index - int(pending.signature.get("header_offset", 0))
             if file_start < 0:
-                still_pending.append(pending)
+                if not exceeded_max_size:
+                    still_pending.append(pending)
                 continue
 
             end_index = buffer.find(footer, header_index + len(header))
             if end_index < 0:
-                still_pending.append(pending)
+                if not exceeded_max_size:
+                    still_pending.append(pending)
                 continue
 
             file_data = buffer[file_start : end_index + len(footer)]

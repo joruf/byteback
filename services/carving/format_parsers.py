@@ -146,13 +146,13 @@ def _png_size(data: bytes) -> int:
 
 def _gif_size(data: bytes) -> int:
     """GIF size from logical screen descriptor and blocks."""
-    if len(data) < 10:
+    if len(data) < 13:  # 6-byte magic + 7-byte logical screen descriptor
         return 0
     if not (data.startswith(b"GIF87a") or data.startswith(b"GIF89a")):
         return 0
 
-    index = 10
-    flags = data[10 - 1] if len(data) >= 10 else 0
+    flags = data[10]  # packed fields byte (global-color-table flag/size), offset 10
+    index = 13  # end of the 13-byte logical screen descriptor (flags, bg index, aspect ratio)
     if flags & 0x80:
         palette_size = 3 * (2 ** ((flags & 0x07) + 1))
         index += palette_size

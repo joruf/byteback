@@ -49,6 +49,37 @@ class TestFormatParsers:
         assert detect_file_size(zip_data, "ZIP Archive") == len(zip_data)
         assert validate_carved_file(zip_data, "ZIP Archive") is True
 
+    def test_gif_size_with_global_color_table(self):
+        """
+        Regression test: the packed-fields byte must be read from offset 10 (not 9,
+        which is actually the height field's high byte), and the color table must
+        start after the full 13-byte logical screen descriptor (flags + background
+        color index + pixel aspect ratio), not right after the flags byte.
+        """
+        width = struct.pack("<H", 4)
+        height = struct.pack("<H", 4)
+        flags = bytes([0x80])  # global color table present, size field 0 -> 2 entries (6 bytes)
+        background_index = bytes([0])
+        aspect_ratio = bytes([0])
+        color_table = b"\x00" * 6
+        trailer = bytes([0x3B])
+        data = b"GIF89a" + width + height + flags + background_index + aspect_ratio + color_table + trailer
+
+        assert detect_file_size(data, "GIF Image (89a)") == len(data)
+        assert validate_carved_file(data, "GIF Image (89a)") is True
+
+    def test_gif_size_without_global_color_table(self):
+        """GIF without a global color table: blocks start immediately after the descriptor."""
+        width = struct.pack("<H", 1)
+        height = struct.pack("<H", 1)
+        flags = bytes([0x00])  # no global color table
+        background_index = bytes([0])
+        aspect_ratio = bytes([0])
+        trailer = bytes([0x3B])
+        data = b"GIF89a" + width + height + flags + background_index + aspect_ratio + trailer
+
+        assert detect_file_size(data, "GIF Image (89a)") == len(data)
+
     def test_unknown_signature_returns_zero(self):
         """Unsupported signatures return zero detected size."""
         assert detect_file_size(b"data", "Unknown Format") == 0

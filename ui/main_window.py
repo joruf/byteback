@@ -69,6 +69,7 @@ class MainWindow(tk.Tk):
         self._pending_var = tk.StringVar(value="Pending: —")
         self._bytes_var = tk.StringVar(value="")
         self._last_progress: Optional[ScanProgress] = None
+        self._heartbeat_active = False
         self._dest_var = tk.StringVar(value="")
         self._zip_var = tk.BooleanVar(value=False)
         self._scan_mode_var = tk.StringVar(value=SCAN_MODE_AUTO)
@@ -491,15 +492,32 @@ class MainWindow(tk.Tk):
 
     def _schedule_byte_heartbeat(self) -> None:
         """
-        Refresh the byte-position display on a fixed 5-second cadence.
+        Start the 5-second byte-position heartbeat, unless one is already ticking.
+
+        Idempotent by design: several call sites (start, resume-after-restart,
+        resume-from-live-pause) may all try to (re)start it around the same time,
+        and calling it twice must not spawn a second concurrent `after()` chain.
+        """
+        if self._heartbeat_active:
+            return
+        self._heartbeat_active = True
+        self._tick_byte_heartbeat()
+
+    def _tick_byte_heartbeat(self) -> None:
+        """
+        Refresh the byte-position display, then re-arm for another 5 seconds.
 
         Runs independently of the (throttled, event-driven) progress callbacks so
         the user sees the display tick even during long single-item operations,
-        confirming the scan is still alive.
+        confirming the scan is still alive. Stops re-arming once the worker is no
+        longer running, clearing the guard flag so a later scan can start a fresh
+        chain via _schedule_byte_heartbeat().
         """
         self._refresh_byte_display()
         if self._scan_worker.is_running:
-            self.after(5000, self._schedule_byte_heartbeat)
+            self.after(5000, self._tick_byte_heartbeat)
+        else:
+            self._heartbeat_active = False
 
     def _on_scan_entry(self, entry: RecoveryEntry) -> None:
         """Insert a newly found entry into the tree."""

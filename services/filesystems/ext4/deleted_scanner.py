@@ -70,17 +70,21 @@ class Ext4DeletedScanner:
         with open_device(device_path) as device:
             superblock = Ext4Superblock.read_from_device(device)
             total = superblock.inode_count
+            final_inode = total
 
             for inode_number in range(max(superblock.first_inode, start_inode), total + 1):
                 if should_cancel and should_cancel():
+                    # Record the actual stopping point — not `total` — so a resumed
+                    # scan continues from here instead of silently believing the
+                    # whole inode table was already covered.
+                    final_inode = inode_number
                     break
 
-                while should_pause and should_pause():
-                    if should_cancel and should_cancel():
-                        return entries, inode_number
-                    import time
-
-                    time.sleep(0.2)
+                if should_pause and should_pause():
+                    # Return immediately (rather than blocking this thread in a sleep
+                    # loop) so the worker can persist a resumable checkpoint and let
+                    # the thread exit; resuming starts a fresh call at this inode.
+                    return entries, inode_number
 
                 if on_progress:
                     on_progress(inode_number, total, f"Inode {inode_number}")
@@ -117,7 +121,7 @@ class Ext4DeletedScanner:
                     if on_entry:
                         on_entry(entry)
 
-        return entries, total
+        return entries, final_inode
 
     def _build_entry(
         self,

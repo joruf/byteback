@@ -10,7 +10,7 @@ from typing import Callable, List, Optional
 
 from models.recovery_entry import EntryType, RecoveryEntry
 from services.file_carver import FileCarver
-from utils.device_io import open_device
+from utils.device_io import open_device, read_with_timeout
 
 logger = logging.getLogger(__name__)
 
@@ -190,10 +190,15 @@ class RecoveryExporter:
         target = os.path.join(preview_dir, f"export_{entry.entry_id}{extension}")
 
         try:
-            max_read = min(entry.size_bytes or 10 * 1024 * 1024, 100 * 1024 * 1024)
+            # Read exactly the carved entry's known size — it was already sized
+            # correctly at carve time (up to each format's own max_size, some of
+            # which exceed 100MB, e.g. TAR/MP4/AVI/MKV). A blanket 100MB cap here
+            # used to silently truncate anything larger into a corrupt export with
+            # no error or warning.
+            read_size = entry.size_bytes or 10 * 1024 * 1024
             with open_device(entry.device_path) as device:
                 device.seek(entry.byte_offset)
-                data = device.read(max_read)
+                data = read_with_timeout(device, read_size)
             with open(target, "wb") as handle:
                 handle.write(data)
             return target

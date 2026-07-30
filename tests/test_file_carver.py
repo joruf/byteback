@@ -5,6 +5,7 @@ Unit tests for FileCarver signature detection.
 import os
 import time
 
+from config import FILE_SIGNATURES
 from models.storage_target import StorageTarget, TargetType
 from services.carving.file_carver import FileCarver as CarvingFileCarver
 from services.file_carver import FileCarver
@@ -185,3 +186,98 @@ class TestFileCarver:
         assert processed == len(buffer), "scanning must continue past the hung chunk to the end"
         assert len(entries) == 1
         assert entries[0].extension == ".jpg"
+
+    def test_carve_range_finds_footer_across_multiple_read_chunks(self, tmp_path, monkeypatch):
+        """
+        Regression test: a footer arriving several RAW_READ_CHUNK_SIZE reads after its
+        header must still be recovered. Previously, the buffer was trimmed down to a
+        few bytes whenever a pass completed nothing, and the pending header match was
+        then silently dropped instead of waiting for the footer — breaking recovery
+        for any realistically-sized JPEG/PNG/PDF whose footer isn't in the same chunk.
+        """
+        monkeypatch.setattr("services.carving.file_carver.RAW_READ_CHUNK_SIZE", 16)
+
+        jpeg_header = b"\xff\xd8\xff\xe0"
+        filler = b"\x00" * 200  # spans more than ten 16-byte read chunks
+        jpeg_footer = b"\xff\xd9"
+        buffer = b"\x00" * 8 + jpeg_header + filler + jpeg_footer + b"\x00" * 8
+
+        device_path = tmp_path / "raw.img"
+        device_path.write_bytes(buffer)
+
+        target = StorageTarget(
+            target_id="multi_chunk",
+            name="multi_chunk",
+            device_path=str(device_path),
+            target_type=TargetType.IMAGE,
+            size_bytes=len(buffer),
+        )
+
+        carver = CarvingFileCarver(preview_dir=str(tmp_path / "previews"))
+        entries, processed = carver.carve_range(
+            target=target,
+            start_offset=0,
+            size_bytes=len(buffer),
+            source_target_id="multi_chunk",
+        )
+
+        assert processed == len(buffer)
+        assert len(entries) == 1, "the header must not be re-detected as duplicate pending entries"
+        assert entries[0].extension == ".jpg"
+        with open(entries[0].preview_path, "rb") as handle:
+            recovered = handle.read()
+        assert recovered == jpeg_header + filler + jpeg_footer
+
+    def test_carve_range_returns_immediately_when_paused(self, tmp_path):
+        """Pause must make carve_range() return right away, not block until resumed."""
+        device_path = tmp_path / "raw.img"
+        device_path.write_bytes(b"\x00" * 64)
+        target = StorageTarget(
+            target_id="pause_test",
+            name="pause_test",
+            device_path=str(device_path),
+            target_type=TargetType.IMAGE,
+            size_bytes=64,
+        )
+
+        carver = CarvingFileCarver(preview_dir=str(tmp_path / "previews"))
+        entries, processed = carver.carve_range(
+            target=target,
+            start_offset=0,
+            size_bytes=64,
+            source_target_id="pause_test",
+            start_from=10,
+            should_pause=lambda: True,
+        )
+
+        assert entries == []
+        assert processed == 10
+
+    def test_carve_range_gives_up_on_pending_carve_past_max_size(self, tmp_path, monkeypatch):
+        """A header whose footer never appears must eventually be dropped, not retained forever."""
+        monkeypatch.setattr("services.carving.file_carver.RAW_READ_CHUNK_SIZE", 16)
+        monkeypatch.setitem(FILE_SIGNATURES["JPEG Image"], "max_size", 64)
+
+        jpeg_header = b"\xff\xd8\xff\xe0"
+        buffer = b"\x00" * 8 + jpeg_header + (b"\x00" * 300)  # footer never appears
+        device_path = tmp_path / "raw.img"
+        device_path.write_bytes(buffer)
+
+        target = StorageTarget(
+            target_id="no_footer",
+            name="no_footer",
+            device_path=str(device_path),
+            target_type=TargetType.IMAGE,
+            size_bytes=len(buffer),
+        )
+
+        carver = CarvingFileCarver(preview_dir=str(tmp_path / "previews"))
+        entries, processed = carver.carve_range(
+            target=target,
+            start_offset=0,
+            size_bytes=len(buffer),
+            source_target_id="no_footer",
+        )
+
+        assert processed == len(buffer)
+        assert entries == []

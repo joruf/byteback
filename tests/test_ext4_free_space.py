@@ -51,3 +51,27 @@ class TestExt4FreeSpaceScanner:
         assert processed >= 0
         assert final_range >= 0
         assert isinstance(entries, list)
+
+    def test_scan_returns_immediately_when_paused(self, tmp_path):
+        """Pause must make scan() return right away, not block until resumed."""
+        image = tmp_path / "free3.ext4"
+        create_ext4_image(image, size_mb=16)
+        target = StorageTarget(
+            target_id="pause_test",
+            name="free3.ext4",
+            device_path=str(image),
+            target_type=TargetType.IMAGE,
+            size_bytes=image.stat().st_size,
+            filesystem="ext4",
+        )
+
+        scanner = Ext4FreeSpaceScanner()
+        entries, processed, final_range = scanner.scan(
+            target=target,
+            source_target_id="pause_test",
+            should_pause=lambda: True,
+        )
+
+        assert entries == []
+        assert processed == 0
+        assert final_range == 0

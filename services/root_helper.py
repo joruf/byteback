@@ -6,15 +6,25 @@ launch and serves JSON line RPC requests for device reads.
 """
 
 import base64
+import concurrent.futures
 import json
 import os
 import shutil
 import subprocess
 import sys
+import threading
 from typing import Any, Dict, Optional
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RUN_SCRIPT = os.path.join(PROJECT_ROOT, "run.py")
+RPC_TIMEOUT_SECONDS = 15.0
+
+# Dedicated pool for bounding RPC reads (see _rpc()). Kept local to this module —
+# utils/device_io.py already depends on this module, so importing its read-timeout
+# pool here would create a circular import.
+_RPC_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
+    max_workers=4, thread_name_prefix="byteback-helper-rpc"
+)
 
 
 class RootHelper:
@@ -25,6 +35,7 @@ class RootHelper:
     def __init__(self) -> None:
         """Initialize an inactive helper."""
         self._proc: Optional[subprocess.Popen[str]] = None
+        self._rpc_lock = threading.Lock()
 
     def is_running(self) -> bool:
         """
@@ -94,7 +105,7 @@ class RootHelper:
             return False
         try:
             return bool(self._rpc({"action": "probe", "path": path}))
-        except RuntimeError:
+        except OSError:
             return False
 
     def size(self, path: str) -> int:
@@ -137,6 +148,14 @@ class RootHelper:
         """
         Send a JSON request and return the response data.
 
+        Serialized by ``_rpc_lock`` so concurrent callers (e.g. a scan thread and
+        an imaging thread both reading through the helper) never interleave their
+        request/response on the same pipe. The response read is time-bounded —
+        the helper process could itself hang on a failing device, and without a
+        timeout that would freeze every caller (including app shutdown) forever,
+        the same class of hang ``read_with_timeout`` guards against for direct
+        device reads.
+
         Args:
             payload: Request dictionary.
 
@@ -144,21 +163,34 @@ class RootHelper:
             Response data on success.
 
         Raises:
-            RuntimeError: When the helper is unavailable or returns an error.
+            OSError: When the helper is unavailable, doesn't respond in time, or
+                reports an error — deliberately an ``OSError`` (not
+                ``RuntimeError``) so it is caught by the same ``except OSError``
+                handling used everywhere else a read can fail (bad sectors,
+                timeouts), instead of aborting the whole scan/image.
         """
-        if not self._proc or not self._proc.stdin or not self._proc.stdout:
-            raise RuntimeError("helper not running")
+        with self._rpc_lock:
+            if not self._proc or not self._proc.stdin or not self._proc.stdout:
+                raise OSError("helper not running")
 
-        self._proc.stdin.write(json.dumps(payload) + "\n")
-        self._proc.stdin.flush()
-        line = self._proc.stdout.readline()
+            self._proc.stdin.write(json.dumps(payload) + "\n")
+            self._proc.stdin.flush()
+
+            future = _RPC_EXECUTOR.submit(self._proc.stdout.readline)
+            try:
+                line = future.result(timeout=RPC_TIMEOUT_SECONDS)
+            except concurrent.futures.TimeoutError as exc:
+                raise OSError(
+                    f"Root helper did not respond within {RPC_TIMEOUT_SECONDS}s"
+                ) from exc
+
         if not line:
-            raise RuntimeError("no response from helper")
+            raise OSError("no response from helper")
 
         response = json.loads(line)
         if response.get("status") == "ok":
             return response.get("data", True)
-        raise RuntimeError(response.get("error", "helper error"))
+        raise OSError(response.get("error", "helper error"))
 
 
 ROOT_HELPER = RootHelper()

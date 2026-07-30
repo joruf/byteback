@@ -135,6 +135,32 @@ class TestExtentTreeDepth:
         assert data == b""
 
 
+class TestExpandExtentEntries:
+    """
+    Regression tests for the ee_len initialized/uninitialized boundary.
+
+    ee_len <= 32768 (EXT_INIT_MAX_LEN) is an initialized extent of that many
+    blocks; ee_len > 32768 is an uninitialized extent of (ee_len - 32768)
+    blocks. A naive "& 0x7FFF" mask breaks exactly at ee_len == 32768 (0x8000),
+    which masks to 0 and silently drops the whole extent — a common case for
+    any large contiguous file region, not a rare edge case.
+    """
+
+    def test_max_initialized_length_is_not_masked_to_zero(self):
+        entry = extent_leaf_entry(logical_block=0, length=32768, physical_start=100)
+
+        blocks = Ext4Inode._expand_extent_entries(entry, remaining_budget=5)
+
+        assert blocks == [100, 101, 102, 103, 104]
+
+    def test_uninitialized_extent_length_is_offset_by_max_init_len(self):
+        entry = extent_leaf_entry(logical_block=0, length=32768 + 3, physical_start=200)
+
+        blocks = Ext4Inode._expand_extent_entries(entry, remaining_budget=10)
+
+        assert blocks == [200, 201, 202]
+
+
 class TestIndirectBlocks:
     """Non-extent (block-mapped) inodes must follow single/double/triple indirect chains."""
 

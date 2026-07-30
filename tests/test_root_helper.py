@@ -5,6 +5,7 @@ Tests for pkexec root helper and device I/O fallback.
 import base64
 import json
 import os
+import threading
 import time
 from unittest.mock import MagicMock, patch
 
@@ -179,3 +180,109 @@ class TestReadWithTimeout:
 
         with pytest.raises(OSError, match="I/O error"):
             read_with_timeout(handle, 512, timeout=1.0)
+
+
+class SlowRpcProcess:
+    """Fake helper subprocess whose stdout.readline() hangs, for RPC timeout tests."""
+
+    def __init__(self, sleep_seconds: float) -> None:
+        self.stdin = MagicMock()
+        self.stdout = MagicMock()
+        self.stdout.readline.side_effect = lambda: time.sleep(sleep_seconds) or ""
+
+    def poll(self):
+        return None
+
+
+class RacyEchoProcess:
+    """
+    Fake helper subprocess that echoes back the "marker" field of whatever request
+    it most recently received — used to detect cross-talk between concurrent RPC
+    callers sharing the same pipe (see TestRootHelperRpcRobustness).
+    """
+
+    def __init__(self, response_delay: float) -> None:
+        self._response_delay = response_delay
+        self._pending = None
+        self.stdin = self
+        self.stdout = self
+
+    def write(self, data: str) -> None:
+        self._pending = json.loads(data)
+
+    def flush(self) -> None:
+        pass
+
+    def readline(self) -> str:
+        # Sleeping here (after the write already landed) widens the window in which
+        # a second, unsynchronized caller's write could clobber self._pending before
+        # this response is built — without the RPC lock, this reliably surfaces the
+        # cross-talk bug instead of only occasionally reproducing it.
+        time.sleep(self._response_delay)
+        return json.dumps({"status": "ok", "data": self._pending["marker"]}) + "\n"
+
+    def poll(self):
+        return None
+
+
+class TestRootHelperRpcRobustness:
+    """
+    Regression tests for the root-helper RPC channel: it must not hang the caller
+    forever on an unresponsive helper, must raise OSError (not RuntimeError) so
+    existing bad-sector-skipping error handling actually catches it, and must
+    serialize concurrent callers instead of letting them read each other's
+    responses off the same pipe.
+    """
+
+    def test_rpc_times_out_instead_of_hanging_forever(self, monkeypatch):
+        monkeypatch.setattr("services.root_helper.RPC_TIMEOUT_SECONDS", 0.05)
+        helper = RootHelper()
+        helper._proc = SlowRpcProcess(sleep_seconds=5.0)
+
+        started = time.monotonic()
+        with pytest.raises(OSError):
+            helper._rpc({"action": "ping"})
+        elapsed = time.monotonic() - started
+
+        assert elapsed < 2.0, "a hung helper must be bounded by the timeout, not the real hang duration"
+
+    def test_rpc_error_raises_oserror(self):
+        """A helper-reported error must be an OSError so existing OSError handlers catch it."""
+        helper = RootHelper()
+        process = MagicMock()
+        process.poll.return_value = None
+        process.stdin = MagicMock()
+        process.stdout = MagicMock()
+        process.stdout.readline.return_value = json.dumps({"status": "err", "error": "boom"}) + "\n"
+        helper._proc = process
+
+        with pytest.raises(OSError, match="boom"):
+            helper._rpc({"action": "read"})
+
+    def test_concurrent_rpc_calls_do_not_cross_talk(self):
+        """
+        Regression test: two threads issuing RPCs at the same time must each get
+        back their own response, never the other thread's — the shared pipe has
+        no per-request id, so this relies entirely on _rpc's lock serializing
+        access.
+        """
+        helper = RootHelper()
+        helper._proc = RacyEchoProcess(response_delay=0.005)
+
+        mismatches = []
+        lock = threading.Lock()
+
+        def worker(marker: str) -> None:
+            for _ in range(20):
+                result = helper._rpc({"action": "echo", "marker": marker})
+                if result != marker:
+                    with lock:
+                        mismatches.append((marker, result))
+
+        threads = [threading.Thread(target=worker, args=(f"thread-{i}",)) for i in range(6)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=5.0)
+
+        assert mismatches == []

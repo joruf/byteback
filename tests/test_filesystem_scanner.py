@@ -52,6 +52,34 @@ class TestFilesystemScanner:
         assert by_name["readme.txt"].parent_id == by_name["docs"].entry_id
         assert by_name["readme.txt"].extra["absolute_path"] == str(readme)
 
+        # Regression: top-level entries (direct children of the scan root) must be
+        # linked to the root entry too — a "!= root" guard used to exclude them
+        # because their relative_path's dirname is "/", same as the root's own,
+        # leaving them permanently unlinked (broken tree display, empty exports
+        # when the root itself is selected for recovery).
+        root_entry = next(entry for entry in entries if entry.relative_path == "/")
+        assert by_name["docs"].parent_id == root_entry.entry_id
+        assert by_name["photo.jpg"].parent_id == root_entry.entry_id
+        assert by_name["docs"].entry_id in root_entry.children_ids
+        assert by_name["photo.jpg"].entry_id in root_entry.children_ids
+
+    def test_scan_returns_immediately_when_paused(self, mounted_partition_target, tmp_path):
+        """
+        Regression test: pause must make scan() return right away (so the worker can
+        persist a checkpoint) instead of blocking inside a sleep loop until resumed.
+        """
+        (tmp_path / "file.txt").write_text("x", encoding="utf-8")
+
+        scanner = FilesystemScanner()
+        entries, queue, _ = scanner.scan(
+            target=mounted_partition_target,
+            source_target_id="part_test",
+            should_pause=lambda: True,
+        )
+
+        assert entries == []
+        assert queue == [str(tmp_path)]
+
     def test_scan_respects_cancel_callback(self, mounted_partition_target, tmp_path):
         """Scan stops when the cancel callback returns True."""
         for index in range(20):

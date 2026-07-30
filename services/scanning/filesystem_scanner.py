@@ -66,12 +66,12 @@ class FilesystemScanner:
             if should_cancel and should_cancel():
                 break
 
-            while should_pause and should_pause():
-                if should_cancel and should_cancel():
-                    return list(entries_by_id.values()), list(dir_queue), bytes_processed
-                import time
-
-                time.sleep(0.2)
+            if should_pause and should_pause():
+                # Return immediately instead of blocking this thread in a sleep loop:
+                # only then does the worker actually reach the code that persists a
+                # resumable checkpoint (see ScanWorker._run_scan) and let the thread
+                # exit cleanly. Resuming starts a fresh call with this same queue.
+                return list(entries_by_id.values()), list(dir_queue), bytes_processed
 
             current_dir = dir_queue.popleft()
             if current_dir in visited_dirs:
@@ -182,8 +182,14 @@ class FilesystemScanner:
         path_to_id: Dict[str, str],
     ) -> None:
         """Link an entry to its parent directory in the tree."""
+        # No "parent_rel != root" guard is needed here: the scan root itself is only
+        # added to path_to_id *after* this call returns (see scan()'s loop), so it can
+        # never be found as its own parent. Excluding "/" unconditionally used to also
+        # exclude every legitimate top-level entry (whose dirname is "/"), leaving them
+        # permanently unlinked from the root — breaking both the results tree display
+        # and recovery export (root selection walked an empty children_ids list).
         parent_rel = os.path.dirname(entry.relative_path)
-        if parent_rel and parent_rel != "/" and parent_rel in path_to_id:
+        if parent_rel and parent_rel in path_to_id:
             parent_id = path_to_id[parent_rel]
             entry.parent_id = parent_id
             parent = entries_by_id[parent_id]

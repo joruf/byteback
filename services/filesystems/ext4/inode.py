@@ -325,7 +325,12 @@ class Ext4Inode:
             start_hi = read_le16(entry, 0x06)
             start_lo = read_le32(entry, 0x08)
             physical_start = start_lo | (start_hi << 32)
-            length_blocks = length & 0x7FFF
+            # ee_len <= 32768 (EXT_INIT_MAX_LEN) is an initialized extent of that many
+            # blocks; ee_len > 32768 is an uninitialized extent of (ee_len - 32768)
+            # blocks. A plain "& 0x7FFF" mask is wrong for the (common) exactly-32768
+            # case: 32768 == 0x8000, so masking clears it to 0 and silently drops the
+            # whole extent.
+            length_blocks = length if length <= 0x8000 else length - 0x8000
             for block_index in range(length_blocks):
                 if len(blocks) >= remaining_budget:
                     break

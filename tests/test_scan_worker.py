@@ -2,6 +2,7 @@
 Unit tests for ScanWorker lifecycle and resume guards.
 """
 
+import time
 from unittest.mock import patch
 
 from config.scan_settings import SCAN_MODE_DEEP_CARVE, SCAN_MODE_FILESYSTEM
@@ -114,3 +115,73 @@ class TestScanWorker:
         worker._emit_progress()
         assert worker._cached_eta_seconds != 120.0
         assert worker._cached_eta_seconds == 6.0
+
+    def test_pause_persists_a_resumable_checkpoint(self, tmp_path, scan_state_dir):
+        """
+        Regression test: pausing a running scan must actually persist a checkpoint.
+
+        Previously, pause() only set a flag while every scan backend absorbed it
+        with an in-place sleep loop instead of returning — so the worker thread
+        never reached the code that saves state, and closing the app mid-pause
+        silently lost the whole scan despite the UI claiming "state saved".
+
+        Uses a fake executor (rather than a real directory scan) so pausing is
+        deterministic instead of racing against how fast a real scan finishes.
+        """
+        target = self._partition(mountpoint=str(tmp_path))
+        worker = ScanWorker()
+
+        def fake_execute(
+            *,
+            target,
+            scan_strategy,
+            source_entries,
+            filesystem_queue,
+            carve_offset,
+            ext4_inode_cursor,
+            free_space_range_index,
+            on_entry,
+            on_progress,
+            should_pause,
+            should_cancel,
+        ):
+            for step in range(500):
+                if should_cancel():
+                    break
+                if should_pause():
+                    return (
+                        "filesystem",
+                        list(source_entries),
+                        {
+                            "bytes_processed": step,
+                            "filesystem_queue": [f"/pretend/dir_{step}"],
+                            "carve_offset": 0,
+                            "ext4_inode_cursor": 0,
+                            "free_space_range_index": 0,
+                        },
+                    )
+                time.sleep(0.01)
+            return "filesystem", list(source_entries), {
+                "bytes_processed": 500,
+                "filesystem_queue": [],
+                "carve_offset": 0,
+                "ext4_inode_cursor": 0,
+                "free_space_range_index": 0,
+            }
+
+        worker._executor.execute = fake_execute
+
+        started, error = worker.start(target, resume=False, scan_strategy=SCAN_MODE_FILESYSTEM)
+        assert started is True and error is None
+
+        time.sleep(0.05)  # let the worker thread actually enter fake_execute's loop
+        worker.pause()
+        worker.wait(timeout=2.0)
+
+        assert worker.is_running is False, "pause must let the worker thread actually exit"
+        assert worker.has_resumable_state is True, "pause must persist a checkpoint to disk"
+
+        summary = worker.saved_state_summary
+        assert summary is not None
+        assert summary["target_id"] == target.target_id
+        assert summary["scan_mode"] == "filesystem"
