@@ -11,6 +11,8 @@ from models.storage_target import StorageTarget
 from services.carving.file_carver import FileCarver
 from services.filesystems.ext4.deleted_scanner import Ext4DeletedScanner
 from services.filesystems.ext4.free_space import Ext4FreeSpaceScanner
+from services.filesystems.fat32.deleted_scanner import Fat32DeletedScanner
+from services.filesystems.ntfs.deleted_scanner import NtfsDeletedScanner
 from services.scanning.filesystem_scanner import FilesystemScanner
 from services.scanning.scan_strategy import ScanStrategyResolver
 
@@ -28,6 +30,8 @@ class ScanExecutor:
         self._file_carver = FileCarver()
         self._deleted_scanner = Ext4DeletedScanner()
         self._free_space_scanner = Ext4FreeSpaceScanner()
+        self._fat32_deleted_scanner = Fat32DeletedScanner()
+        self._ntfs_deleted_scanner = NtfsDeletedScanner()
         self._strategy = ScanStrategyResolver()
 
     def execute(
@@ -93,6 +97,59 @@ class ScanExecutor:
                 "free_space_range_index": free_space_range_index,
             }
 
+        if mode == ScanStrategyResolver.MODE_FAT32_DELETED:
+            if not Fat32DeletedScanner.supports_target(target):
+                raise ValueError("Selected target is not a readable FAT32 filesystem")
+
+            # Reuses the generic `filesystem_queue` checkpoint slot to hold
+            # pending directory *cluster numbers* (as strings) rather than the
+            # path strings FilesystemScanner stores there — safe because a
+            # resumed scan always re-resolves to the same mode for the same
+            # target, so the two producers/consumers never mix.
+            initial_queue = [int(item) for item in filesystem_queue] if filesystem_queue else None
+            entries, queue, processed = self._fat32_deleted_scanner.scan(
+                target=target,
+                source_target_id=target.target_id,
+                initial_queue=initial_queue,
+                on_entry=on_entry,
+                on_progress=on_progress,
+                should_pause=should_pause,
+                should_cancel=should_cancel,
+            )
+            merged = list(source_entries) + entries
+            return mode, merged, {
+                "bytes_processed": processed,
+                "filesystem_queue": [str(cluster) for cluster in queue],
+                "carve_offset": carve_offset,
+                "ext4_inode_cursor": ext4_inode_cursor,
+                "free_space_range_index": free_space_range_index,
+            }
+
+        if mode == ScanStrategyResolver.MODE_NTFS_DELETED:
+            if not NtfsDeletedScanner.supports_target(target):
+                raise ValueError("Selected target is not a readable NTFS filesystem")
+
+            # Reuses the generic `ext4_inode_cursor` checkpoint slot to hold the
+            # MFT record cursor — same "linear metadata-record scan" resume
+            # shape as ext4 inodes, just for a different filesystem.
+            entries, final_record = self._ntfs_deleted_scanner.scan(
+                target=target,
+                source_target_id=target.target_id,
+                start_record=ext4_inode_cursor,
+                on_entry=on_entry,
+                on_progress=on_progress,
+                should_pause=should_pause,
+                should_cancel=should_cancel,
+            )
+            merged = list(source_entries) + entries
+            return mode, merged, {
+                "bytes_processed": final_record,
+                "filesystem_queue": filesystem_queue or [],
+                "carve_offset": carve_offset,
+                "ext4_inode_cursor": final_record,
+                "free_space_range_index": free_space_range_index,
+            }
+
         if mode == ScanStrategyResolver.MODE_FREE_SPACE:
             if not Ext4FreeSpaceScanner.supports_target(target):
                 raise ValueError("Selected target is not a readable ext4 filesystem")
@@ -142,6 +199,6 @@ class ScanExecutor:
     @staticmethod
     def progress_interval_for_mode(mode: str) -> float:
         """Return the recommended progress throttle interval for a mode."""
-        if mode == ScanStrategyResolver.MODE_FILESYSTEM:
+        if mode in (ScanStrategyResolver.MODE_FILESYSTEM, ScanStrategyResolver.MODE_FAT32_DELETED):
             return FILESYSTEM_SCAN_INTERVAL
         return CARVE_SCAN_INTERVAL

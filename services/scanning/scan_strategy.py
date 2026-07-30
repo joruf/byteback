@@ -8,12 +8,16 @@ from config.scan_settings import (
     SCAN_MODE_AUTO,
     SCAN_MODE_DEEP_CARVE,
     SCAN_MODE_EXT4_DELETED,
+    SCAN_MODE_FAT32_DELETED,
     SCAN_MODE_FILESYSTEM,
     SCAN_MODE_FREE_SPACE,
+    SCAN_MODE_NTFS_DELETED,
     SCAN_MODE_QUICK_CARVE,
 )
 from models.storage_target import StorageTarget, TargetType
 from services.filesystems.ext4.deleted_scanner import Ext4DeletedScanner
+from services.filesystems.fat32.deleted_scanner import Fat32DeletedScanner
+from services.filesystems.ntfs.deleted_scanner import NtfsDeletedScanner
 
 
 class ScanStrategyResolver:
@@ -23,6 +27,8 @@ class ScanStrategyResolver:
     MODE_DEEP_CARVE = "deep_carve"
     MODE_QUICK_CARVE = "quick_carve"
     MODE_EXT4_DELETED = "ext4_deleted"
+    MODE_FAT32_DELETED = "fat32_deleted"
+    MODE_NTFS_DELETED = "ntfs_deleted"
     MODE_FREE_SPACE = "free_space"
 
     def resolve(self, target: StorageTarget, scan_strategy: str) -> str:
@@ -48,6 +54,12 @@ class ScanStrategyResolver:
         if scan_strategy == SCAN_MODE_EXT4_DELETED:
             return self.MODE_EXT4_DELETED
 
+        if scan_strategy == SCAN_MODE_FAT32_DELETED:
+            return self.MODE_FAT32_DELETED
+
+        if scan_strategy == SCAN_MODE_NTFS_DELETED:
+            return self.MODE_NTFS_DELETED
+
         if scan_strategy == SCAN_MODE_FREE_SPACE:
             return self.MODE_FREE_SPACE
 
@@ -56,6 +68,10 @@ class ScanStrategyResolver:
                 return self.MODE_FILESYSTEM
             if Ext4DeletedScanner.supports_target(target):
                 return self.MODE_EXT4_DELETED
+            if Fat32DeletedScanner.supports_target(target):
+                return self.MODE_FAT32_DELETED
+            if NtfsDeletedScanner.supports_target(target):
+                return self.MODE_NTFS_DELETED
             return self.MODE_DEEP_CARVE
 
         return self.MODE_DEEP_CARVE
