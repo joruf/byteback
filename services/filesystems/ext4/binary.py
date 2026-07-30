@@ -5,6 +5,8 @@ Binary helpers for ext4 on-disk structures.
 import struct
 from typing import BinaryIO, Tuple
 
+from utils.device_io import read_with_timeout
+
 
 EXT4_SUPERBLOCK_OFFSET = 1024
 EXT4_MAGIC = 0xEF53
@@ -39,9 +41,14 @@ def read_block(device: BinaryIO, block_size: int, block_number: int) -> bytes:
 
     Returns:
         Raw block bytes.
+
+    Raises:
+        OSError: When the block cannot be read, including a read that hangs
+            past ``DEVICE_READ_TIMEOUT_SECONDS`` (``TimeoutError`` is an
+            ``OSError`` subclass, so existing callers already handle it).
     """
     device.seek(block_number * block_size)
-    data = device.read(block_size)
+    data = read_with_timeout(device, block_size)
     if len(data) != block_size:
         raise OSError(f"Could not read block {block_number}")
     return data

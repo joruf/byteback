@@ -12,13 +12,15 @@ from datetime import datetime, timezone
 from typing import BinaryIO, Callable, List, Optional, Tuple
 
 from config.scan_settings import (
+    DEVICE_READ_TIMEOUT_SECONDS,
     IMAGE_CHECKPOINT_INTERVAL_SECONDS,
     IMAGE_READ_CHUNK_SIZE,
     IMAGE_SECTOR_FALLBACK_SIZE,
+    IMAGE_SECTOR_TIMEOUT_SECONDS,
 )
 from models.disk_image import DiskImageRecord
 from utils.atomic_io import write_json_atomic
-from utils.device_io import open_device
+from utils.device_io import open_device, read_with_timeout
 
 logger = logging.getLogger(__name__)
 
@@ -154,10 +156,18 @@ class DiskImageWriter:
         only the actually-unreadable sectors are zero-filled and logged in
         ``bad_ranges`` — the rest of the chunk is still recovered, instead of
         discarding a whole multi-megabyte chunk for one bad sector.
+
+        A hung/unresponsive drive is bounded the same way: the initial attempt
+        gives the drive a fair ``DEVICE_READ_TIMEOUT_SECONDS`` chance, but once
+        we're already limping through sector-by-sector recovery within this
+        chunk, each sector only gets the much shorter
+        ``IMAGE_SECTOR_TIMEOUT_SECONDS`` — otherwise a fully unresponsive region
+        could take (sectors-per-chunk × full timeout) to get through, which
+        would itself make Cancel feel unresponsive again.
         """
         source.seek(absolute_offset)
         try:
-            data = source.read(length)
+            data = read_with_timeout(source, length, timeout=DEVICE_READ_TIMEOUT_SECONDS)
             if len(data) == length:
                 return data
         except OSError:
@@ -170,7 +180,7 @@ class DiskImageWriter:
             step = min(IMAGE_SECTOR_FALLBACK_SIZE, remaining)
             try:
                 source.seek(cursor)
-                sector = source.read(step)
+                sector = read_with_timeout(source, step, timeout=IMAGE_SECTOR_TIMEOUT_SECONDS)
             except OSError:
                 sector = b""
             if len(sector) < step:

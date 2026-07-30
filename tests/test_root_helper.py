@@ -5,12 +5,13 @@ Tests for pkexec root helper and device I/O fallback.
 import base64
 import json
 import os
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from services.root_helper import RootHelper, _is_allowed_path, helper_main
-from utils.device_io import RootHelperDevice, open_device
+from utils.device_io import RootHelperDevice, open_device, read_with_timeout
 
 
 class TestRootHelperPaths:
@@ -129,3 +130,52 @@ class TestDeviceIo:
 
         with pytest.raises(OSError):
             open_device("/dev/sda")
+
+
+class FakeSlowHandle:
+    """Fake device handle whose read() blocks, to test read_with_timeout()."""
+
+    def __init__(self, sleep_seconds: float, result: bytes = b"", to_raise: Exception = None) -> None:
+        self._sleep_seconds = sleep_seconds
+        self._result = result
+        self._to_raise = to_raise
+
+    def read(self, _size: int) -> bytes:
+        time.sleep(self._sleep_seconds)
+        if self._to_raise:
+            raise self._to_raise
+        return self._result
+
+
+class TestReadWithTimeout:
+    """
+    Tests for the read-hang guard used throughout scanning/imaging.
+
+    A failing or hung drive must never block a caller forever — this is what
+    makes Cancel responsive even when a single read stalls.
+    """
+
+    def test_fast_read_returns_data(self, tmp_path):
+        """A normal, quick read returns the requested bytes unchanged."""
+        image = tmp_path / "disk.dd"
+        image.write_bytes(b"abcdef")
+        with open(image, "rb") as handle:
+            assert read_with_timeout(handle, 6) == b"abcdef"
+
+    def test_hanging_read_raises_timeout_promptly(self):
+        """A read that never returns in time raises TimeoutError, not hang forever."""
+        handle = FakeSlowHandle(sleep_seconds=5.0)
+        started = time.monotonic()
+
+        with pytest.raises(TimeoutError):
+            read_with_timeout(handle, 512, timeout=0.05)
+
+        elapsed = time.monotonic() - started
+        assert elapsed < 2.0, "caller must regain control near the configured timeout, not wait for the read"
+
+    def test_read_error_propagates_unchanged(self):
+        """A real read error (e.g. a bad sector) is not masked as a timeout."""
+        handle = FakeSlowHandle(sleep_seconds=0.0, to_raise=OSError("I/O error"))
+
+        with pytest.raises(OSError, match="I/O error"):
+            read_with_timeout(handle, 512, timeout=1.0)

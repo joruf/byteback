@@ -4,6 +4,7 @@ Tests for disk image creation and registry.
 
 import hashlib
 import os
+import time
 
 import pytest
 
@@ -235,3 +236,81 @@ class TestDiskImageWriterResume:
 
         assert destination_path.read_bytes() == payload
         assert record.sha256 == hashlib.sha256(payload).hexdigest()
+
+
+class HangingSource:
+    """
+    Wraps a real file; reads overlapping a configured byte range block for a
+    fixed duration instead of returning — simulates an unresponsive/hung drive
+    (as opposed to FaultInjectingSource's fast I/O-error simulation).
+    """
+
+    def __init__(self, path: str, hang_range: tuple, hang_seconds: float = 5.0) -> None:
+        self._file = open(path, "rb")
+        self._hang_start, self._hang_end = hang_range
+        self._hang_seconds = hang_seconds
+        self._position = 0
+        self.hang_triggered = False
+
+    def seek(self, offset: int, whence: int = os.SEEK_SET) -> int:
+        result = self._file.seek(offset, whence)
+        self._position = result
+        return result
+
+    def read(self, size: int = -1) -> bytes:
+        start = self._position
+        end = start + size if size >= 0 else None
+        if end is None or (start < self._hang_end and end > self._hang_start):
+            self.hang_triggered = True
+            time.sleep(self._hang_seconds)
+            raise OSError("simulated hang resolved as an I/O error")
+        data = self._file.read(size)
+        self._position += len(data)
+        return data
+
+    def tell(self) -> int:
+        return self._position
+
+    def close(self) -> None:
+        self._file.close()
+
+    def __enter__(self) -> "HangingSource":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.close()
+
+
+class TestDiskImageWriterHungDrive:
+    """A hung (not just erroring) source read must not block imaging or Cancel forever."""
+
+    def test_hanging_region_is_treated_like_a_bad_sector(self, tmp_path, monkeypatch):
+        """A read that hangs (rather than fails fast) still completes within a bounded time."""
+        monkeypatch.setattr("services.imaging.writer.DEVICE_READ_TIMEOUT_SECONDS", 0.05)
+        monkeypatch.setattr("services.imaging.writer.IMAGE_SECTOR_TIMEOUT_SECONDS", 0.02)
+
+        payload = bytes((i % 251) for i in range(50_000))
+        source_path = tmp_path / "hanging_device.bin"
+        source_path.write_bytes(payload)
+        destination_path = tmp_path / "hanging.dd"
+
+        hang_range = (20_000, 20_512)
+        hanging_source = HangingSource(str(source_path), hang_range=hang_range, hang_seconds=5.0)
+        monkeypatch.setattr("services.imaging.writer.open_device", lambda path: hanging_source)
+
+        writer = DiskImageWriter()
+        started = time.monotonic()
+        record, _output_path = writer.create_image(
+            source_device=str(source_path),
+            destination_path=str(destination_path),
+        )
+        elapsed = time.monotonic() - started
+
+        assert hanging_source.hang_triggered is True
+        assert elapsed < 10.0, "a single hung region must not block imaging for its full hang duration"
+        assert record.has_bad_sectors
+
+        expected = bytearray(payload)
+        for offset, length in record.bad_sector_ranges:
+            expected[offset : offset + length] = b"\x00" * length
+        assert destination_path.read_bytes() == bytes(expected)

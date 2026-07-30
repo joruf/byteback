@@ -10,10 +10,14 @@ that would be impractical to coax a real filesystem into producing.
 
 import io
 import struct
+import time
 
-from services.filesystems.ext4.binary import EXT4_EXT_MAGIC, EXT4_EXTENTS_FL
+import pytest
+
+from services.filesystems.ext4.binary import EXT4_EXT_MAGIC, EXT4_EXTENTS_FL, read_block
 from services.filesystems.ext4.inode import Ext4Inode
 from services.filesystems.ext4.superblock import Ext4Superblock
+from utils.device_io import read_with_timeout as real_read_with_timeout
 
 BLOCK_SIZE = 1024
 
@@ -190,3 +194,41 @@ class TestIndirectBlocks:
         data = inode.read_file_data(device, superblock, raw_inode)
 
         assert data == b"Z" * BLOCK_SIZE
+
+
+class HangingDevice:
+    """Fake device whose read() blocks for a fixed duration, to test read timeouts."""
+
+    def __init__(self, sleep_seconds: float) -> None:
+        self._sleep_seconds = sleep_seconds
+
+    def seek(self, offset: int, whence: int = 0) -> int:
+        return offset
+
+    def read(self, size: int) -> bytes:
+        time.sleep(self._sleep_seconds)
+        return b"\x00" * size
+
+
+class TestReadBlockTimeout:
+    """
+    A hung device read must surface as an OSError promptly, not block the
+    scanner forever — this is what keeps Cancel responsive on a failing disk.
+    """
+
+    def test_read_block_raises_oserror_on_timeout(self, monkeypatch):
+        def fast_read_with_timeout(handle, size, timeout=0.05):
+            return real_read_with_timeout(handle, size, timeout=timeout)
+
+        monkeypatch.setattr(
+            "services.filesystems.ext4.binary.read_with_timeout", fast_read_with_timeout
+        )
+
+        device = HangingDevice(sleep_seconds=5.0)
+        started = time.monotonic()
+
+        with pytest.raises(OSError):
+            read_block(device, BLOCK_SIZE, 0)
+
+        elapsed = time.monotonic() - started
+        assert elapsed < 2.0, "a hung read must be bounded by the timeout, not the real hang duration"

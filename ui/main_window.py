@@ -67,6 +67,8 @@ class MainWindow(tk.Tk):
         self._eta_var = tk.StringVar(value="ETA: —")
         self._found_var = tk.StringVar(value="Found: 0")
         self._pending_var = tk.StringVar(value="Pending: —")
+        self._bytes_var = tk.StringVar(value="")
+        self._last_progress: Optional[ScanProgress] = None
         self._dest_var = tk.StringVar(value="")
         self._zip_var = tk.BooleanVar(value=False)
         self._scan_mode_var = tk.StringVar(value=SCAN_MODE_AUTO)
@@ -229,6 +231,7 @@ class MainWindow(tk.Tk):
         info_row = ttk.Frame(progress_frame)
         info_row.pack(fill=tk.X, pady=(4, 0))
         ttk.Label(info_row, textvariable=self._status_var).pack(side=tk.LEFT)
+        ttk.Label(info_row, textvariable=self._bytes_var).pack(side=tk.LEFT, padx=(12, 0))
         ttk.Label(info_row, textvariable=self._phase_var).pack(side=tk.LEFT, padx=(12, 0))
         ttk.Label(info_row, textvariable=self._eta_var).pack(side=tk.LEFT, padx=(12, 0))
         ttk.Label(info_row, textvariable=self._found_var).pack(side=tk.LEFT, padx=(12, 0))
@@ -388,6 +391,8 @@ class MainWindow(tk.Tk):
         self._set_scan_controls(scanning=True)
         self._recover_button.configure(state="disabled")
         self._progress_var.set(0.0)
+        self._bytes_var.set("")
+        self._last_progress = None
 
         resume = self._scan_worker.has_resumable_state
         if resume:
@@ -405,6 +410,7 @@ class MainWindow(tk.Tk):
 
         mode_label = self._scan_mode_var.get().replace("_", " ")
         self._status_var.set(f"Scanning {target.name} ({mode_label})…")
+        self._schedule_byte_heartbeat()
 
     def _restore_results_from_saved_state(self) -> None:
         """Repopulate the results tree from a saved pause checkpoint."""
@@ -423,12 +429,14 @@ class MainWindow(tk.Tk):
             self._pause_button.configure(text="Pause")
             self._set_scan_controls(scanning=True)
             self._status_var.set("Resuming scan…")
+            self._schedule_byte_heartbeat()
             return
 
         if self._scan_worker.is_paused:
             self._scan_worker.resume_scan()
             self._pause_button.configure(text="Pause")
             self._status_var.set("Scan resumed")
+            self._schedule_byte_heartbeat()
         else:
             self._scan_worker.pause()
             self._pause_button.configure(text="Resume")
@@ -448,6 +456,8 @@ class MainWindow(tk.Tk):
 
     def _apply_progress(self, progress: ScanProgress) -> None:
         """Update progress widgets on the main thread."""
+        self._last_progress = progress
+        self._refresh_byte_display()
         self._progress_var.set(progress.percent)
         self._phase_var.set(f"Phase: {progress.phase}")
         self._eta_var.set(f"ETA: {progress.eta_display}")
@@ -468,6 +478,28 @@ class MainWindow(tk.Tk):
             self._pause_button.configure(text="Resume")
         elif self._scan_worker.is_running:
             self._pause_button.configure(text="Pause")
+
+    def _refresh_byte_display(self) -> None:
+        """Render the last known progress snapshot as 'processed / total'."""
+        progress = self._last_progress
+        if not progress or progress.bytes_total <= 0:
+            self._bytes_var.set("")
+            return
+        processed = StorageTarget.format_size(progress.bytes_processed)
+        total = StorageTarget.format_size(progress.bytes_total)
+        self._bytes_var.set(f"{processed} / {total}")
+
+    def _schedule_byte_heartbeat(self) -> None:
+        """
+        Refresh the byte-position display on a fixed 5-second cadence.
+
+        Runs independently of the (throttled, event-driven) progress callbacks so
+        the user sees the display tick even during long single-item operations,
+        confirming the scan is still alive.
+        """
+        self._refresh_byte_display()
+        if self._scan_worker.is_running:
+            self.after(5000, self._schedule_byte_heartbeat)
 
     def _on_scan_entry(self, entry: RecoveryEntry) -> None:
         """Insert a newly found entry into the tree."""
@@ -527,6 +559,8 @@ class MainWindow(tk.Tk):
             self._results_tree.clear()
             self._details.show_entry(None)
             self._progress_var.set(0.0)
+            self._bytes_var.set("")
+            self._last_progress = None
             self._status_var.set("Scan cancelled. Select a device and start again.")
         self._recover_button.configure(state="disabled")
 

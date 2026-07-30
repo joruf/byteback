@@ -14,7 +14,7 @@ from config.storage_paths import PREVIEW_DIR_NAME
 from models.recovery_entry import EntryType, RecoveryEntry
 from models.storage_target import StorageTarget
 from services.carving.format_parsers import detect_file_size, validate_carved_file
-from utils.device_io import open_device
+from utils.device_io import open_device, read_with_timeout
 
 logger = logging.getLogger(__name__)
 
@@ -132,7 +132,21 @@ class FileCarver:
                         time.sleep(0.2)
 
                     read_size = min(RAW_READ_CHUNK_SIZE, size_bytes - processed)
-                    chunk = device.read(read_size)
+                    try:
+                        chunk = read_with_timeout(device, read_size)
+                    except OSError as exc:
+                        # A hung or bad-sector read must not block the whole carve (or
+                        # Cancel) forever — skip past it and keep scanning the rest.
+                        logger.warning(
+                            "Read failed at offset %s on %s (%s); skipping %d bytes",
+                            start_offset + processed,
+                            device_path,
+                            exc,
+                            read_size,
+                        )
+                        processed += read_size
+                        device.seek(start_offset + processed)
+                        continue
                     if not chunk:
                         break
 
@@ -335,7 +349,11 @@ class FileCarver:
         """
         probe_size = min(max_size, 512 * 1024)
         context.device.seek(absolute_offset)
-        probe = context.device.read(probe_size)
+        try:
+            probe = read_with_timeout(context.device, probe_size)
+        except OSError as exc:
+            logger.warning("Read failed probing offset %s (%s)", absolute_offset, exc)
+            return b""
         if not probe:
             return b""
 
@@ -346,7 +364,11 @@ class FileCarver:
             return probe[:read_size]
 
         context.device.seek(absolute_offset)
-        return context.device.read(read_size)
+        try:
+            return read_with_timeout(context.device, read_size)
+        except OSError as exc:
+            logger.warning("Read failed at offset %s (%s); using probe data only", absolute_offset, exc)
+            return probe
 
     def _finalize_carve(
         self,

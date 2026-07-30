@@ -59,7 +59,7 @@ class ResultsTree(ttk.Frame):
         self.tree.heading("size", text="Size", anchor="e")
 
         self.tree.column("#0", width=420, stretch=True)
-        self.tree.column("checked", width=40, stretch=False, anchor="center")
+        self.tree.column("checked", width=44, stretch=False, anchor="center")
         self.tree.column("type", width=100, stretch=False)
         self.tree.column("size", width=90, stretch=False, anchor="e")
 

@@ -160,7 +160,7 @@ def configure_ui_style(root: tk.Tk) -> Dict[str, str]:
     )
     style.configure(
         "Treeview",
-        rowheight=26,
+        rowheight=30,
         background=panel_bg,
         fieldbackground=panel_bg,
         foreground=fg,

@@ -16,6 +16,7 @@ from services.filesystems.ext4.binary import (
     read_le32,
 )
 from services.filesystems.ext4.superblock import Ext4Superblock
+from utils.device_io import read_with_timeout
 
 
 @dataclass
@@ -362,7 +363,7 @@ def read_inode_raw(
         table_block * superblock.block_size + index_in_group * superblock.inode_size
     )
     device.seek(byte_offset)
-    raw = device.read(superblock.inode_size)
+    raw = read_with_timeout(device, superblock.inode_size)
     if len(raw) < superblock.inode_size:
         raise OSError(f"Could not read inode {inode_number}")
     return raw
