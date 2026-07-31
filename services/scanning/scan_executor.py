@@ -9,6 +9,7 @@ from config.scan_settings import CARVE_SCAN_INTERVAL, FILESYSTEM_SCAN_INTERVAL
 from models.recovery_entry import RecoveryEntry
 from models.storage_target import StorageTarget
 from services.carving.file_carver import FileCarver
+from services.filesystems.exfat.deleted_scanner import ExfatDeletedScanner
 from services.filesystems.ext4.deleted_scanner import Ext4DeletedScanner
 from services.filesystems.ext4.free_space import Ext4FreeSpaceScanner
 from services.filesystems.fat32.deleted_scanner import Fat32DeletedScanner
@@ -32,6 +33,7 @@ class ScanExecutor:
         self._free_space_scanner = Ext4FreeSpaceScanner()
         self._fat32_deleted_scanner = Fat32DeletedScanner()
         self._ntfs_deleted_scanner = NtfsDeletedScanner()
+        self._exfat_deleted_scanner = ExfatDeletedScanner()
         self._strategy = ScanStrategyResolver()
 
     def execute(
@@ -150,6 +152,34 @@ class ScanExecutor:
                 "free_space_range_index": free_space_range_index,
             }
 
+        if mode == ScanStrategyResolver.MODE_EXFAT_DELETED:
+            if not ExfatDeletedScanner.supports_target(target):
+                raise ValueError("Selected target is not a readable exFAT filesystem")
+
+            # Reuses the generic `filesystem_queue` checkpoint slot to hold
+            # pending directory descriptors (encoded strings, see
+            # ExfatDeletedScanner._encode_queue_item) rather than the path
+            # strings FilesystemScanner stores there — safe because a resumed
+            # scan always re-resolves to the same mode for the same target, so
+            # the two producers/consumers never mix.
+            entries, queue, processed = self._exfat_deleted_scanner.scan(
+                target=target,
+                source_target_id=target.target_id,
+                initial_queue=filesystem_queue or None,
+                on_entry=on_entry,
+                on_progress=on_progress,
+                should_pause=should_pause,
+                should_cancel=should_cancel,
+            )
+            merged = list(source_entries) + entries
+            return mode, merged, {
+                "bytes_processed": processed,
+                "filesystem_queue": queue,
+                "carve_offset": carve_offset,
+                "ext4_inode_cursor": ext4_inode_cursor,
+                "free_space_range_index": free_space_range_index,
+            }
+
         if mode == ScanStrategyResolver.MODE_FREE_SPACE:
             if not Ext4FreeSpaceScanner.supports_target(target):
                 raise ValueError("Selected target is not a readable ext4 filesystem")
@@ -199,6 +229,10 @@ class ScanExecutor:
     @staticmethod
     def progress_interval_for_mode(mode: str) -> float:
         """Return the recommended progress throttle interval for a mode."""
-        if mode in (ScanStrategyResolver.MODE_FILESYSTEM, ScanStrategyResolver.MODE_FAT32_DELETED):
+        if mode in (
+            ScanStrategyResolver.MODE_FILESYSTEM,
+            ScanStrategyResolver.MODE_FAT32_DELETED,
+            ScanStrategyResolver.MODE_EXFAT_DELETED,
+        ):
             return FILESYSTEM_SCAN_INTERVAL
         return CARVE_SCAN_INTERVAL

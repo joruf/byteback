@@ -1,6 +1,6 @@
 # ByteBack v2.0
 
-**ByteBack** is a Linux data recovery tool with a graphical user interface. It enumerates disks, partitions, disk images, and unallocated space; performs deep scans including ext4 deleted-file recovery; and lets you export selected items to a folder or ZIP archive.
+**ByteBack** is a Linux data recovery tool with a graphical user interface. It enumerates disks, partitions, disk images, and unallocated space; performs deep scans including ext4, NTFS, FAT32, and exFAT deleted-file recovery; and lets you export selected items to a folder or ZIP archive.
 
 ## Screenshots
 
@@ -27,9 +27,11 @@ Create a verified raw ``.dd`` image before scanning a source device.
 - **Device discovery** – lists block devices, partitions, loop devices, unallocated gaps, and saved disk images
 - **Disk imaging** – create verified raw ``.dd`` images before analysis (Tools → Create disk image)
 - **Scan modes**
-  - **auto** – filesystem inventory on mounted partitions, ext4 deleted scan elsewhere
+  - **auto** – filesystem inventory on mounted partitions, deleted-file scan (ext4/NTFS/FAT32/exFAT) elsewhere
   - **filesystem** – inventory existing files on mounted partitions
   - **ext4_deleted** – recover deleted files via ext4 inode metadata (real deleted-file recovery)
+  - **ntfs_deleted** – recover deleted files via NTFS MFT records
+  - **fat32_deleted** / **exfat_deleted** – recover deleted files via FAT32/exFAT directory entries
   - **free_space** – carve signatures only from unallocated ext4 blocks
   - **deep_carve** / **quick_carve** – signature carving on raw/unallocated regions
 - **Format validation** – carved files validated via format-specific parsers
@@ -50,6 +52,9 @@ byteback/
 │   ├── carving/                # Signature carving + format parsers
 │   ├── scanning/               # Filesystem scan, strategy, executor
 │   ├── filesystems/ext4/       # ext4 deleted inode + free-space scanners
+│   ├── filesystems/ntfs/       # NTFS MFT record parsing + deleted-file scanner
+│   ├── filesystems/fat32/      # FAT32 directory/cluster-chain parsing + deleted-file scanner
+│   ├── filesystems/exfat/      # exFAT directory-entry-set parsing + deleted-file scanner
 │   ├── imaging/                # Disk image writer + registry
 │   ├── device_scanner.py
 │   ├── scan_worker.py
@@ -70,6 +75,9 @@ byteback/
 - Linux with `lsblk` (util-linux)
 - `parted` (recommended, for unallocated region detection)
 - `mkfs.ext4` and `debugfs` (optional, for ext4 recovery tests)
+- `mkntfs`, `ntfscp`, and `ntfsinfo` from `ntfs-3g`/`ntfsprogs` (optional, for NTFS recovery tests)
+- `mkfs.vfat` and `mtools` (optional, for FAT32 recovery tests)
+- `mkfs.exfat` from `exfatprogs` (optional, for exFAT recovery tests)
 - Python 3.10+ with `tkinter` (`python3-tk` on Debian/Ubuntu/Mint)
 - Optional: `python3-magic` for improved MIME detection
 - `polkit` (`pkexec`) for the one-time administrator prompt at startup

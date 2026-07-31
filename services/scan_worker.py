@@ -358,7 +358,7 @@ class ScanWorker:
             pending = f"Inode cursor {self._ext4_inode_cursor}"
         elif self._scan_mode == "ntfs_deleted":
             pending = f"MFT record cursor {self._ext4_inode_cursor}"
-        elif self._scan_mode == "fat32_deleted" and self._filesystem_queue:
+        elif self._scan_mode in ("fat32_deleted", "exfat_deleted") and self._filesystem_queue:
             pending = f"{len(self._filesystem_queue)} directories remaining"
         elif self._scan_mode == "free_space":
             pending = f"Free-space range {self._free_space_range_index}"

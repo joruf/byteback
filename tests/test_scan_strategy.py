@@ -6,6 +6,7 @@ import pytest
 
 from config.scan_settings import (
     SCAN_MODE_AUTO,
+    SCAN_MODE_EXFAT_DELETED,
     SCAN_MODE_EXT4_DELETED,
     SCAN_MODE_FAT32_DELETED,
     SCAN_MODE_FILESYSTEM,
@@ -14,6 +15,7 @@ from config.scan_settings import (
 )
 from models.storage_target import StorageTarget, TargetType
 from services.scanning.scan_strategy import ScanStrategyResolver
+from tests.exfat_helpers import create_exfat_image, tools_available as exfat_tools_available
 from tests.fat32_helpers import create_fat32_image, tools_available
 from tests.ntfs_helpers import create_ntfs_image, tools_available as ntfs_tools_available
 
@@ -94,3 +96,24 @@ class TestScanStrategyResolver:
         )
 
         assert resolver.resolve(target, SCAN_MODE_AUTO) == ScanStrategyResolver.MODE_NTFS_DELETED
+
+    def test_exfat_deleted_mode(self):
+        """Explicit exFAT deleted mode is returned."""
+        resolver = ScanStrategyResolver()
+        target = self._target(filesystem="exfat")
+
+        assert resolver.resolve(target, SCAN_MODE_EXFAT_DELETED) == ScanStrategyResolver.MODE_EXFAT_DELETED
+
+    @pytest.mark.skipif(not exfat_tools_available(), reason="mkfs.exfat not available")
+    def test_auto_mode_detects_exfat_when_unmounted(self, tmp_path):
+        """Auto mode falls through ext4/FAT32/NTFS detection and correctly identifies an exFAT image."""
+        image = tmp_path / "vol.exfat"
+        create_exfat_image(image, size_mb=8)
+        resolver = ScanStrategyResolver()
+        target = self._target(
+            device_path=str(image),
+            target_type=TargetType.IMAGE,
+            filesystem="exfat",
+        )
+
+        assert resolver.resolve(target, SCAN_MODE_AUTO) == ScanStrategyResolver.MODE_EXFAT_DELETED
