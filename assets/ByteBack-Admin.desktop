@@ -4,7 +4,8 @@ Type=Application
 Name=ByteBack (Admin)
 GenericName=Data Recovery
 Comment=Scan raw disks and unallocated space for recoverable files
-Exec=pkexec @LAUNCHER@
+# %k is this .desktop file. run.py lives in the project root, one directory up.
+Exec=/bin/bash -c "cd \\$(dirname \\$(readlink -f \\$0))/.. && exec pkexec python3 ./run.py" %k
 Icon=byteback
 Terminal=false
 Categories=System;Utility;Filesystem;

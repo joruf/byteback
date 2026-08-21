@@ -4,11 +4,10 @@ Type=Application
 Name=ByteBack
 GenericName=Data Recovery
 Comment=Scan disks and partitions for recoverable files (requests admin access at startup)
-# %k is this .desktop file. run.py lives in the project root, one directory up.
-Exec=/bin/bash -c "cd \\$(dirname \\$(readlink -f \\$0))/.. && exec python3 ./run.py" %k
+# %k is this .desktop file, so ./run.py is always the one in the same folder.
+Exec=/bin/bash -c "cd \\$(dirname \\$(readlink -f \\$0)) && exec python3 ./run.py" %k
 Icon=byteback
 Terminal=false
 Categories=System;Utility;Filesystem;
 Keywords=recovery;data;disk;partition;restore;carve;
 StartupNotify=true
-MimeType=

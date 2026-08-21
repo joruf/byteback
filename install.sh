@@ -180,9 +180,8 @@ exec python3 "${APP_DIR}/run.py" "\$@"
 EOF
     chmod +x "${LAUNCHER}"
 
-    sed "s|@LAUNCHER@|${LAUNCHER}|g" \
-        "${SCRIPT_DIR}/assets/ByteBack.desktop" \
-        >"${DESKTOP_DIR}/ByteBack.desktop"
+    ln -sfn "${APP_DIR}/ByteBack.desktop" "${DESKTOP_DIR}/ByteBack.desktop"
+    chmod +x "${APP_DIR}/ByteBack.desktop"
 
     install_icons
 
